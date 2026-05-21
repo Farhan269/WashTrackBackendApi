@@ -1,0 +1,2448 @@
+﻿i give you my all backend code one by one
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+		<PackageReference Include="EPPlus" Version="7.7.3" />
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.20" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.20">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+		<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.20" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.20">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+	</ItemGroup>
+
+</Project>
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using wsahRecieveDelivary.Data;
+using wsahRecieveDelivary.DTOs;
+using wsahRecieveDelivary.Services;
+
+namespace wsahRecieveDelivary.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class AuthController : ControllerBase
+    {
+        private readonly IAuthService _authService;
+        private readonly ApplicationDbContext _context;
+
+        public AuthController(IAuthService authService, ApplicationDbContext context)
+        {
+            _authService = authService;
+            _context = context;
+        }
+
+        [HttpPost("register")]
+        public async Task<IActionResult> Register([FromBody] RegisterDto registerDto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var result = await _authService.RegisterAsync(registerDto);
+
+            if (!result.Success)
+                return BadRequest(result);
+
+            return Ok(result);
+        }
+
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] LoginDto loginDto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var result = await _authService.LoginAsync(loginDto);
+
+            if (!result.Success)
+                return Unauthorized(result);
+
+            return Ok(result);
+        }
+
+        [Authorize]
+        [HttpGet("profile")]
+        public async Task<IActionResult> GetProfile()
+        {
+            var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var username = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value;
+            var roles = User.FindAll(System.Security.Claims.ClaimTypes.Role).Select(c => c.Value).ToList();
+            var isAdmin = roles.Contains("Admin");
+
+            List<string> categories;
+            if (isAdmin)
+            {
+                // Admin gets all categories
+                categories = await _context.Categories
+                    .Where(c => c.IsActive)
+                    .Select(c => c.Name)
+                    .ToListAsync();
+            }
+            else
+            {
+                // User gets categories from token
+                categories = User.FindAll("Category").Select(c => c.Value).ToList();
+            }
+
+            return Ok(new
+            {
+                UserId = userId,
+                Username = username,
+                Roles = roles,
+                IsAdmin = isAdmin,
+                Categories = categories,
+                Message = isAdmin ? "Admin has access to all categories" : "User has limited category access"
+            });
+        }
+    }
+}
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
+using wsahRecieveDelivary.Data;
+using wsahRecieveDelivary.Models;
+
+namespace wsahRecieveDelivary.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    [Authorize]
+    public class ProcessStageController : ControllerBase
+    {
+        private readonly ApplicationDbContext _context;
+
+        public ProcessStageController(ApplicationDbContext context)
+        {
+            _context = context;
+        }
+
+        // ==========================================
+        // GET ALL PROCESS STAGES
+        // ==========================================
+        [HttpGet]
+        public async Task<IActionResult> GetAll()
+        {
+            try
+            {
+                var stages = await _context.ProcessStages
+                    .Where(s => s.IsActive)
+                    .OrderBy(s => s.DisplayOrder)
+                    .ToListAsync();
+
+                return Ok(new { success = true, data = stages });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET BY ID
+        // ==========================================
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            try
+            {
+                var stage = await _context.ProcessStages.FindAsync(id);
+                if (stage == null)
+                    return NotFound(new { success = false, message = "Process stage not found" });
+
+                return Ok(new { success = true, data = stage });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // CREATE NEW PROCESS STAGE (Admin Only)
+        // ==========================================
+        [HttpPost]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Create([FromBody] ProcessStage stage)
+        {
+            try
+            {
+                if (await _context.ProcessStages.AnyAsync(s => s.Name == stage.Name))
+                    return BadRequest(new { success = false, message = "Process stage already exists" });
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                stage.CreatedAt = DateTime.UtcNow;
+
+                _context.ProcessStages.Add(stage);
+                await _context.SaveChangesAsync();
+
+                // Also add to Categories for user access control
+                var category = new Category
+                {
+                    Name = stage.Name,
+                    Description = stage.Description,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.Categories.Add(category);
+                await _context.SaveChangesAsync();
+
+                return CreatedAtAction(nameof(GetById), new { id = stage.Id },
+                    new { success = true, message = "Process stage created", data = stage });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // UPDATE PROCESS STAGE (Admin Only)
+        // ==========================================
+        [HttpPut("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Update(int id, [FromBody] ProcessStage updatedStage)
+        {
+            try
+            {
+                var stage = await _context.ProcessStages.FindAsync(id);
+                if (stage == null)
+                    return NotFound(new { success = false, message = "Process stage not found" });
+
+                stage.Name = updatedStage.Name;
+                stage.Description = updatedStage.Description;
+                stage.DisplayOrder = updatedStage.DisplayOrder;
+                stage.IsActive = updatedStage.IsActive;
+                stage.UpdatedAt = DateTime.UtcNow;
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = "Process stage updated", data = stage });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // DELETE/DEACTIVATE PROCESS STAGE (Admin Only)
+        // ==========================================
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            try
+            {
+                var stage = await _context.ProcessStages.FindAsync(id);
+                if (stage == null)
+                    return NotFound(new { success = false, message = "Process stage not found" });
+
+                // Soft delete
+                stage.IsActive = false;
+                stage.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, message = "Process stage deactivated" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+    }
+}
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using wsahRecieveDelivary.DTOs;
+using wsahRecieveDelivary.Models.Enums;
+using wsahRecieveDelivary.Services;
+
+namespace wsahRecieveDelivary.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    [Authorize]
+    public class WashTransactionController : ControllerBase
+    {
+        private readonly IWashTransactionService _service;
+
+        public WashTransactionController(IWashTransactionService service)
+        {
+            _service = service;
+        }
+
+        // ==========================================
+        // CREATE RECEIVE
+        // ==========================================
+        /// <summary>
+        /// Create a receive transaction
+        /// </summary>
+        [HttpPost("receive")]
+        public async Task<IActionResult> CreateReceive([FromBody] CreateWashTransactionDto dto)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                    return BadRequest(ModelState);
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var result = await _service.CreateReceiveAsync(dto, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Receive transaction created successfully",
+                    data = result
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // CREATE DELIVERY
+        // ==========================================
+        /// <summary>
+        /// Create a delivery transaction
+        /// </summary>
+        [HttpPost("delivery")]
+        public async Task<IActionResult> CreateDelivery([FromBody] CreateWashTransactionDto dto)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                    return BadRequest(ModelState);
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var result = await _service.CreateDeliveryAsync(dto, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Delivery transaction created successfully",
+                    data = result
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, message = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET ALL TRANSACTIONS
+        // ==========================================
+        /// <summary>
+        /// Get all transactions
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> GetAll()
+        {
+            try
+            {
+                var transactions = await _service.GetAllAsync();
+                return Ok(new
+                {
+                    success = true,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET BY ID
+        // ==========================================
+        /// <summary>
+        /// Get transaction by ID
+        /// </summary>
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            try
+            {
+                var transaction = await _service.GetByIdAsync(id);
+                if (transaction == null)
+                {
+                    return NotFound(new { success = false, message = $"Transaction with ID {id} not found" });
+                }
+
+                return Ok(new { success = true, data = transaction });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET BY WORK ORDER
+        // ==========================================
+        /// <summary>
+        /// Get all transactions for a work order
+        /// </summary>
+        [HttpGet("workorder/{workOrderId}")]
+        public async Task<IActionResult> GetByWorkOrder(int workOrderId)
+        {
+            try
+            {
+                var transactions = await _service.GetByWorkOrderAsync(workOrderId);
+                return Ok(new
+                {
+                    success = true,
+                    workOrderId = workOrderId,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // ✅ CHANGED: GET BY STAGE (int instead of enum)
+        // ==========================================
+        /// <summary>
+        /// Get all transactions for a process stage
+        /// </summary>
+        [HttpGet("stage/{processStageId}")]
+        public async Task<IActionResult> GetByStage(int processStageId)
+        {
+            try
+            {
+                var transactions = await _service.GetByStageAsync(processStageId);
+                return Ok(new
+                {
+                    success = true,
+                    processStageId = processStageId,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // FILTER TRANSACTIONS
+        // ==========================================
+        /// <summary>
+        /// Filter transactions by multiple criteria
+        /// </summary>
+        [HttpPost("filter")]
+        public async Task<IActionResult> Filter([FromBody] WashTransactionFilterDto filter)
+        {
+            try
+            {
+                var transactions = await _service.GetByFilterAsync(filter);
+                return Ok(new
+                {
+                    success = true,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // UPDATE TRANSACTION
+        // ==========================================
+        /// <summary>
+        /// Update transaction (Admin only)
+        /// </summary>
+        [HttpPut("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Update(int id, [FromBody] CreateWashTransactionDto dto)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                    return BadRequest(ModelState);
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var result = await _service.UpdateAsync(id, dto, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Transaction updated successfully",
+                    data = result
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // DELETE TRANSACTION
+        // ==========================================
+        /// <summary>
+        /// Delete transaction (Admin only)
+        /// </summary>
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            try
+            {
+                var result = await _service.DeleteAsync(id);
+                if (!result)
+                {
+                    return NotFound(new { success = false, message = $"Transaction with ID {id} not found" });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Transaction deleted successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET BALANCES BY WORK ORDER
+        // ==========================================
+        /// <summary>
+        /// Get stage-wise balances for a work order
+        /// </summary>
+        [HttpGet("balance/workorder/{workOrderId}")]
+        public async Task<IActionResult> GetBalances(int workOrderId)
+        {
+            try
+            {
+                var balances = await _service.GetBalancesByWorkOrderAsync(workOrderId);
+                return Ok(new
+                {
+                    success = true,
+                    workOrderId = workOrderId,
+                    data = balances
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET WASH STATUS
+        // ==========================================
+        /// <summary>
+        /// Get complete wash status for a work order
+        /// </summary>
+        [HttpGet("status/workorder/{workOrderId}")]
+        public async Task<IActionResult> GetWashStatus(int workOrderId)
+        {
+            try
+            {
+                var status = await _service.GetWashStatusAsync(workOrderId);
+                if (status == null)
+                {
+                    return NotFound(new { success = false, message = $"WorkOrder with ID {workOrderId} not found" });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = status
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET ALL WASH STATUSES
+        // ==========================================
+        /// <summary>
+        /// Get wash status for all work orders
+        /// </summary>
+        [HttpGet("status/all")]
+        public async Task<IActionResult> GetAllStatuses()
+        {
+            try
+            {
+                var statuses = await _service.GetAllWashStatusesAsync();
+                return Ok(new
+                {
+                    success = true,
+                    count = statuses.Count,
+                    data = statuses
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // GET STAGE SUMMARY
+        // ==========================================
+        /// <summary>
+        /// Get summary report for all stages
+        /// </summary>
+        [HttpGet("summary/stages")]
+        public async Task<IActionResult> GetStageSummary()
+        {
+            try
+            {
+                var summary = await _service.GetStageSummaryAsync();
+                return Ok(new
+                {
+                    success = true,
+                    data = summary
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // ✅ CHANGED: GET RECEIVES BY STAGE (int instead of enum)
+        // ==========================================
+        /// <summary>
+        /// Get all receive transactions for a stage
+        /// </summary>
+        [HttpGet("receives/stage/{processStageId}")]
+        public async Task<IActionResult> GetReceivesByStage(int processStageId, [FromQuery] DateTime? startDate = null, [FromQuery] DateTime? endDate = null)
+        {
+            try
+            {
+                var transactions = await _service.GetReceivesByStageAsync(processStageId, startDate, endDate);
+                return Ok(new
+                {
+                    success = true,
+                    processStageId = processStageId,
+                    startDate = startDate,
+                    endDate = endDate,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ==========================================
+        // ✅ CHANGED: GET DELIVERIES BY STAGE (int instead of enum)
+        // ==========================================
+        /// <summary>
+        /// Get all delivery transactions for a stage
+        /// </summary>
+        [HttpGet("deliveries/stage/{processStageId}")]
+        public async Task<IActionResult> GetDeliveriesByStage(int processStageId, [FromQuery] DateTime? startDate = null, [FromQuery] DateTime? endDate = null)
+        {
+            try
+            {
+                var transactions = await _service.GetDeliveriesByStageAsync(processStageId, startDate, endDate);
+                return Ok(new
+                {
+                    success = true,
+                    processStageId = processStageId,
+                    startDate = startDate,
+                    endDate = endDate,
+                    count = transactions.Count,
+                    data = transactions
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+    }
+}
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using wsahRecieveDelivary.DTOs;
+using wsahRecieveDelivary.Services;
+
+namespace wsahRecieveDelivary.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    [Authorize] // All endpoints require authentication
+    public class WorkOrderController : ControllerBase
+    {
+        private readonly IWorkOrderService _workOrderService;
+
+        public WorkOrderController(IWorkOrderService workOrderService)
+        {
+            _workOrderService = workOrderService;
+        }
+
+        // ==========================================
+        // GET ALL WORK ORDERS
+        // ==========================================
+        /// <summary>
+        /// Get all work orders
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> GetAll()
+        {
+            try
+            {
+                var workOrders = await _workOrderService.GetAllAsync();
+                return Ok(new
+                {
+                    success = true,
+                    data = workOrders,
+                    count = workOrders.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error retrieving work orders: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // GET BY ID
+        // ==========================================
+        /// <summary>
+        /// Get work order by ID
+        /// </summary>
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            try
+            {
+                var workOrder = await _workOrderService.GetByIdAsync(id);
+
+                if (workOrder == null)
+                {
+                    return NotFound(new
+                    {
+                        success = false,
+                        message = $"Work order with ID {id} not found"
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = workOrder
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error retrieving work order: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // GET BY WORK ORDER NO
+        // ==========================================
+        /// <summary>
+        /// Get work order by Work Order Number
+        /// </summary>
+        [HttpGet("by-workorderno/{workOrderNo}")]
+        public async Task<IActionResult> GetByWorkOrderNo(string workOrderNo)
+        {
+            try
+            {
+                var workOrder = await _workOrderService.GetByWorkOrderNoAsync(workOrderNo);
+
+                if (workOrder == null)
+                {
+                    return NotFound(new
+                    {
+                        success = false,
+                        message = $"Work order '{workOrderNo}' not found"
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = workOrder
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error retrieving work order: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // CREATE WORK ORDER
+        // ==========================================
+        /// <summary>
+        /// Create new work order (Admin only)
+        /// </summary>
+        [HttpPost]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Create([FromBody] WorkOrderDto dto)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Invalid data",
+                        errors = ModelState.Values.SelectMany(v => v.Errors.Select(e => e.ErrorMessage))
+                    });
+                }
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var workOrder = await _workOrderService.CreateAsync(dto, userId);
+
+                return CreatedAtAction(
+                    nameof(GetById),
+                    new { id = workOrder.Id },
+                    new
+                    {
+                        success = true,
+                        message = "Work order created successfully",
+                        data = workOrder
+                    });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error creating work order: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // UPDATE WORK ORDER
+        // ==========================================
+        /// <summary>
+        /// Update existing work order (Admin only)
+        /// </summary>
+        [HttpPut("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Update(int id, [FromBody] WorkOrderDto dto)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Invalid data",
+                        errors = ModelState.Values.SelectMany(v => v.Errors.Select(e => e.ErrorMessage))
+                    });
+                }
+
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var workOrder = await _workOrderService.UpdateAsync(id, dto, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Work order updated successfully",
+                    data = workOrder
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error updating work order: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // DELETE WORK ORDER
+        // ==========================================
+        /// <summary>
+        /// Delete work order (Admin only)
+        /// </summary>
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            try
+            {
+                var result = await _workOrderService.DeleteAsync(id);
+
+                if (!result)
+                {
+                    return NotFound(new
+                    {
+                        success = false,
+                        message = $"Work order with ID {id} not found"
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Work order deleted successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error deleting work order: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // BULK UPLOAD FROM EXCEL
+        // ==========================================
+        /// <summary>
+        /// Bulk upload work orders from Excel file (Admin only)
+        /// </summary>
+        [HttpPost("bulk-upload")]
+        [Authorize(Roles = "Admin")]
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> BulkUpload(IFormFile file)
+        {
+            try
+            {
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
+                var result = await _workOrderService.BulkUploadFromExcelAsync(file, userId);
+
+                if (!result.Success)
+                {
+                    return BadRequest(result);
+                }
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error processing bulk upload: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
+        // DOWNLOAD EXCEL TEMPLATE
+        // ==========================================
+        /// <summary>
+        /// Download Excel template for bulk upload
+        /// </summary>
+        [HttpGet("download-template")]
+        [Authorize(Roles = "Admin")]
+        public IActionResult DownloadTemplate()
+        {
+            try
+            {
+                using var package = new OfficeOpenXml.ExcelPackage();
+                var worksheet = package.Workbook.Worksheets.Add("WorkOrders");
+
+                // Set headers
+                string[] headers =
+                {
+                    "Factory", "Line", "Unit", "Buyer", "Buyer Department",
+                    "Style Name", "FastReact No", "Color", "Work Order No",
+                    "Wash Type", "Order Quantity", "Cut Qty", "TOD",
+                    "Sewing Comp. Date", "1st RCV Date", "Wash Approval Date",
+                    "Wash Target Date", "Total Wash Received", "Total Wash Delivery",
+                    "Wash Balance", "From Received", "Marks"
+                };
+
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    worksheet.Cells[1, i + 1].Value = headers[i];
+                    worksheet.Cells[1, i + 1].Style.Font.Bold = true;
+                }
+
+                // Add sample data row
+                worksheet.Cells[2, 1].Value = "TAL";
+                worksheet.Cells[2, 2].Value = "Line E+G";
+                worksheet.Cells[2, 3].Value = "Unit TWL";
+                worksheet.Cells[2, 4].Value = "Zara";
+                worksheet.Cells[2, 5].Value = "Zara TRF";
+                worksheet.Cells[2, 6].Value = "FOLDED WAISTBAND (5252/214/400)";
+                worksheet.Cells[2, 7].Value = "68051-D::Blue-400::301025";
+                worksheet.Cells[2, 8].Value = "Blue-400";
+                worksheet.Cells[2, 9].Value = "00062914";
+                worksheet.Cells[2, 10].Value = "Acid Wash";
+                worksheet.Cells[2, 11].Value = "15,000";
+                worksheet.Cells[2, 12].Value = "15,449";
+                worksheet.Cells[2, 13].Value = "30-Oct";
+                worksheet.Cells[2, 14].Value = "21-Oct-25";
+                worksheet.Cells[2, 15].Value = "17-Oct";
+                worksheet.Cells[2, 16].Value = "06-Oct-25";
+                worksheet.Cells[2, 17].Value = "12-Nov-25";
+                worksheet.Cells[2, 18].Value = "15,442";
+                worksheet.Cells[2, 19].Value = "916";
+                worksheet.Cells[2, 20].Value = "14,526";
+                worksheet.Cells[2, 21].Value = "";
+                worksheet.Cells[2, 22].Value = "";
+
+                // Auto-fit columns
+                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+
+                var stream = new MemoryStream();
+                package.SaveAs(stream);
+                stream.Position = 0;
+
+                return File(
+                    stream,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "WorkOrder_Template.xlsx"
+                );
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error generating template: {ex.Message}"
+                });
+            }
+        }
+    }
+}
+using Microsoft.EntityFrameworkCore;
+using wsahRecieveDelivary.Models;
+
+namespace wsahRecieveDelivary.Data
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
+        {
+        }
+
+        // ==========================================
+        // DbSets - Database Tables
+        // ==========================================
+        public DbSet<User> Users { get; set; }
+        public DbSet<Role> Roles { get; set; }
+        public DbSet<UserRole> UserRoles { get; set; }
+        public DbSet<Category> Categories { get; set; }
+        public DbSet<UserCategoryAccess> UserCategoryAccesses { get; set; }
+        public DbSet<ProcessStage> ProcessStages { get; set; }  // ✅ NEW - Dynamic Process Stages
+        public DbSet<WorkOrder> WorkOrders { get; set; }
+        public DbSet<WashTransaction> WashTransactions { get; set; }
+        public DbSet<ProcessStageBalance> ProcessStageBalances { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // ==========================================
+            // USER CONFIGURATION
+            // ==========================================
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Username).IsUnique();
+                entity.HasIndex(e => e.Email).IsUnique();
+                entity.Property(e => e.FullName).IsRequired().HasMaxLength(200);
+                entity.Property(e => e.Username).IsRequired().HasMaxLength(50);
+                entity.Property(e => e.Email).IsRequired().HasMaxLength(100);
+            });
+
+            // ==========================================
+            // ROLE CONFIGURATION
+            // ==========================================
+            modelBuilder.Entity<Role>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Name).IsUnique();
+                entity.Property(e => e.Name).IsRequired().HasMaxLength(50);
+            });
+
+            // ==========================================
+            // USER-ROLE RELATIONSHIP
+            // ==========================================
+            modelBuilder.Entity<UserRole>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.UserId, e.RoleId }).IsUnique();
+
+                entity.HasOne(ur => ur.User)
+                    .WithMany(u => u.UserRoles)
+                    .HasForeignKey(ur => ur.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(ur => ur.Role)
+                    .WithMany(r => r.UserRoles)
+                    .HasForeignKey(ur => ur.RoleId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // ==========================================
+            // CATEGORY CONFIGURATION
+            // ==========================================
+            modelBuilder.Entity<Category>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Name).IsUnique();
+                entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            });
+
+            // ==========================================
+            // USER-CATEGORY ACCESS
+            // ==========================================
+            modelBuilder.Entity<UserCategoryAccess>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.UserId, e.CategoryId }).IsUnique();
+
+                entity.HasOne(uca => uca.User)
+                    .WithMany(u => u.UserCategoryAccesses)
+                    .HasForeignKey(uca => uca.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(uca => uca.Category)
+                    .WithMany(c => c.UserCategoryAccesses)
+                    .HasForeignKey(uca => uca.CategoryId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // ==========================================
+            // ✅ PROCESS STAGE CONFIGURATION (NEW - DYNAMIC)
+            // ==========================================
+            modelBuilder.Entity<ProcessStage>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Name).IsUnique();
+                entity.HasIndex(e => e.DisplayOrder);
+
+                entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.Description).HasMaxLength(200);
+                entity.Property(e => e.DisplayOrder).IsRequired();
+                entity.Property(e => e.IsActive).HasDefaultValue(true);
+                entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            });
+
+            // ==========================================
+            // WASH TRANSACTION CONFIGURATION (UPDATED)
+            // ==========================================
+            modelBuilder.Entity<WashTransaction>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                // Indexes for performance
+                entity.HasIndex(e => e.WorkOrderId);
+                entity.HasIndex(e => new { e.WorkOrderId, e.ProcessStageId, e.TransactionType });  // ✅ CHANGED
+                entity.HasIndex(e => e.TransactionDate);
+                entity.HasIndex(e => e.BatchNo);
+                entity.HasIndex(e => e.ProcessStageId);  // ✅ NEW
+
+                // Enum conversions
+                entity.Property(e => e.TransactionType)
+                    .HasConversion<string>()
+                    .IsRequired()
+                    .HasMaxLength(20);
+
+                // ✅ REMOVED: ProcessStage enum conversion (now it's a foreign key)
+
+                // String lengths
+                entity.Property(e => e.Quantity).IsRequired();
+                entity.Property(e => e.BatchNo).HasMaxLength(100);
+                entity.Property(e => e.GatePassNo).HasMaxLength(100);
+                entity.Property(e => e.Remarks).HasMaxLength(500);
+                entity.Property(e => e.ReceivedBy).HasMaxLength(100);
+                entity.Property(e => e.DeliveredTo).HasMaxLength(100);
+
+                // Foreign Keys
+                entity.HasOne(t => t.WorkOrder)
+                    .WithMany()
+                    .HasForeignKey(t => t.WorkOrderId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                // ✅ NEW: ProcessStage Foreign Key
+                entity.HasOne(t => t.ProcessStage)
+                    .WithMany(ps => ps.WashTransactions)
+                    .HasForeignKey(t => t.ProcessStageId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasOne(t => t.CreatedByUser)
+                    .WithMany()
+                    .HasForeignKey(t => t.CreatedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasOne(t => t.UpdatedByUser)
+                    .WithMany()
+                    .HasForeignKey(t => t.UpdatedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                // Default values
+                entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+                entity.Property(e => e.IsActive).HasDefaultValue(true);
+            });
+
+            // ==========================================
+            // PROCESS STAGE BALANCE CONFIGURATION (UPDATED)
+            // ==========================================
+            modelBuilder.Entity<ProcessStageBalance>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                // ✅ CHANGED: Unique constraint with ProcessStageId
+                entity.HasIndex(e => new { e.WorkOrderId, e.ProcessStageId }).IsUnique();
+
+                entity.Property(e => e.TotalReceived).HasDefaultValue(0);
+                entity.Property(e => e.TotalDelivered).HasDefaultValue(0);
+                entity.Property(e => e.CurrentBalance).HasDefaultValue(0);
+
+                // Foreign Keys
+                entity.HasOne(s => s.WorkOrder)
+                    .WithMany()
+                    .HasForeignKey(s => s.WorkOrderId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                // ✅ NEW: ProcessStage Foreign Key
+                entity.HasOne(s => s.ProcessStage)
+                    .WithMany(ps => ps.ProcessStageBalances)
+                    .HasForeignKey(s => s.ProcessStageId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                entity.Property(e => e.LastUpdated).HasDefaultValueSql("GETUTCDATE()");
+            });
+
+            // ==========================================
+            // WORK ORDER CONFIGURATION
+            // ==========================================
+            modelBuilder.Entity<WorkOrder>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                // Unique constraint on WorkOrderNo
+                entity.HasIndex(e => e.WorkOrderNo).IsUnique();
+
+                // Composite index for faster searches
+                entity.HasIndex(e => new { e.Factory, e.Line, e.WorkOrderNo });
+                entity.HasIndex(e => new { e.Buyer, e.WorkOrderNo });
+
+                // Column constraints
+                entity.Property(e => e.Factory).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.Line).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.Unit).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.Buyer).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.BuyerDepartment).HasMaxLength(100);
+                entity.Property(e => e.StyleName).IsRequired().HasMaxLength(200);
+                entity.Property(e => e.FastReactNo).HasMaxLength(100);
+                entity.Property(e => e.Color).HasMaxLength(100);
+                entity.Property(e => e.WorkOrderNo).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.WashType).HasMaxLength(100);
+                entity.Property(e => e.Marks).HasMaxLength(500);
+
+                // Foreign Key: CreatedBy
+                entity.HasOne(w => w.CreatedByUser)
+                    .WithMany()
+                    .HasForeignKey(w => w.CreatedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                // Foreign Key: UpdatedBy
+                entity.HasOne(w => w.UpdatedByUser)
+                    .WithMany()
+                    .HasForeignKey(w => w.UpdatedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                // Default values
+                entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            });
+
+            // Seed Initial Data
+            SeedData(modelBuilder);
+        }
+
+        // ==========================================
+        // SEED DATA
+        // ==========================================
+        private void SeedData(ModelBuilder modelBuilder)
+        {
+            // ==========================================
+            // Seed Roles
+            // ==========================================
+            modelBuilder.Entity<Role>().HasData(
+                new Role
+                {
+                    Id = 1,
+                    Name = "Admin",
+                    Description = "Full system access",
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new Role
+                {
+                    Id = 2,
+                    Name = "User",
+                    Description = "Limited access based on category",
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            );
+
+            // ==========================================
+            // ✅ Seed Process Stages (NEW - DYNAMIC)
+            // ==========================================
+            modelBuilder.Entity<ProcessStage>().HasData(
+                new ProcessStage
+                {
+                    Id = 1,
+                    Name = "1st Dry",
+                    Description = "First Dry Process",
+                    DisplayOrder = 1,
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new ProcessStage
+                {
+                    Id = 2,
+                    Name = "Unwash",
+                    Description = "Unwash Process",
+                    DisplayOrder = 2,
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new ProcessStage
+                {
+                    Id = 3,
+                    Name = "2nd Dry",
+                    Description = "Second Dry Process",
+                    DisplayOrder = 3,
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new ProcessStage
+                {
+                    Id = 4,
+                    Name = "1st Wash",
+                    Description = "First Wash Process",
+                    DisplayOrder = 4,
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new ProcessStage
+                {
+                    Id = 5,
+                    Name = "Final Wash",
+                    Description = "Final Wash Process",
+                    DisplayOrder = 5,
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            );
+
+            // ==========================================
+            // Seed Categories (Synced with Process Stages)
+            // ==========================================
+            modelBuilder.Entity<Category>().HasData(
+                new Category
+                {
+                    Id = 1,
+                    Name = "1st Dry",
+                    Description = "First Dry Process",
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new Category
+                {
+                    Id = 2,
+                    Name = "Unwash",
+                    Description = "Unwash Process",
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new Category
+                {
+                    Id = 3,
+                    Name = "2nd Dry",
+                    Description = "Second Dry Process",
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new Category
+                {
+                    Id = 4,
+                    Name = "1st Wash",
+                    Description = "First Wash Process",
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new Category
+                {
+                    Id = 5,
+                    Name = "Final Wash",
+                    Description = "Final Wash Process",
+                    IsActive = true,
+                    CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            );
+        }
+    }
+}
+
+
+namespace wsahRecieveDelivary.DTOs
+{
+    public class AuthResponseDto
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public string? Token { get; set; }
+        public UserInfoDto? User { get; set; }
+    }
+
+    public class UserInfoDto
+    {
+        public int Id { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public List<string> Roles { get; set; } = new List<string>();
+        public List<CategoryAccessDto> CategoryAccesses { get; set; } = new List<CategoryAccessDto>();
+    }
+
+    public class CategoryAccessDto
+    {
+        public int CategoryId { get; set; }
+        public string CategoryName { get; set; } = string.Empty;
+        public bool CanView { get; set; }
+        public bool CanEdit { get; set; }
+        public bool CanDelete { get; set; }
+    }
+}
+using System.ComponentModel.DataAnnotations;
+
+namespace wsahRecieveDelivary.DTOs
+{
+    public class LoginDto
+    {
+        [Required]
+        public string Username { get; set; } = string.Empty;
+
+        [Required]
+        public string Password { get; set; } = string.Empty;
+    }
+}
+using System.ComponentModel.DataAnnotations;
+
+namespace wsahRecieveDelivary.DTOs
+{
+    public class RegisterDto
+    {
+        [Required]
+        [StringLength(200)]
+        public string FullName { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(50)]
+        public string Username { get; set; } = string.Empty;
+
+        [Required]
+        [EmailAddress]
+        [StringLength(100)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required]
+        [MinLength(6)]
+        public string Password { get; set; } = string.Empty;
+
+        public List<int> RoleIds { get; set; } = new List<int>();
+
+        // CategoryIds শুধু User role এর জন্য প্রয়োজন, Admin এর জন্য optional
+        public List<int> CategoryIds { get; set; } = new List<int>();
+    }
+}
+using System.ComponentModel.DataAnnotations;
+using wsahRecieveDelivary.Models.Enums;
+
+namespace wsahRecieveDelivary.DTOs
+{
+    // ==========================================
+    // CREATE TRANSACTION DTO
+    // ==========================================
+    public class CreateWashTransactionDto
+    {
+        [Required(ErrorMessage = "WorkOrderId is required")]
+        public int WorkOrderId { get; set; }
+
+        [Required(ErrorMessage = "TransactionType is required")]
+        public TransactionType TransactionType { get; set; }
+
+        [Required(ErrorMessage = "ProcessStageId is required")]
+        public int ProcessStageId { get; set; }  // ✅ CHANGED
+
+        [Required(ErrorMessage = "Quantity is required")]
+        [Range(1, int.MaxValue, ErrorMessage = "Quantity must be greater than 0")]
+        public int Quantity { get; set; }
+
+        public DateTime? TransactionDate { get; set; }
+
+        [StringLength(100)]
+        public string? BatchNo { get; set; }
+
+        [StringLength(100)]
+        public string? GatePassNo { get; set; }
+
+        [StringLength(500)]
+        public string? Remarks { get; set; }
+
+        [StringLength(100)]
+        public string? ReceivedBy { get; set; }
+
+        [StringLength(100)]
+        public string? DeliveredTo { get; set; }
+    }
+
+    // ==========================================
+    // TRANSACTION RESPONSE DTO
+    // ==========================================
+    public class WashTransactionResponseDto
+    {
+        public int Id { get; set; }
+        public int WorkOrderId { get; set; }
+        public string WorkOrderNo { get; set; } = string.Empty;
+        public string StyleName { get; set; } = string.Empty;
+        public string Buyer { get; set; } = string.Empty;
+        public string Factory { get; set; } = string.Empty;
+        public string Line { get; set; } = string.Empty;
+
+        public TransactionType TransactionType { get; set; }
+        public string TransactionTypeName { get; set; } = string.Empty;
+
+        public int ProcessStageId { get; set; }  // ✅ CHANGED
+        public string ProcessStageName { get; set; } = string.Empty;
+
+        public int Quantity { get; set; }
+        public DateTime TransactionDate { get; set; }
+
+        public string? BatchNo { get; set; }
+        public string? GatePassNo { get; set; }
+        public string? Remarks { get; set; }
+        public string? ReceivedBy { get; set; }
+        public string? DeliveredTo { get; set; }
+
+        public string CreatedByUsername { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
+        public string? UpdatedByUsername { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+    }
+
+    // ==========================================
+    // PROCESS BALANCE DTO
+    // ==========================================
+    public class ProcessBalanceDto
+    {
+        public int WorkOrderId { get; set; }
+        public string WorkOrderNo { get; set; } = string.Empty;
+        public string StyleName { get; set; } = string.Empty;
+
+        public int ProcessStageId { get; set; }  // ✅ CHANGED
+        public string ProcessStageName { get; set; } = string.Empty;
+
+        public int TotalReceived { get; set; }
+        public int TotalDelivered { get; set; }
+        public int CurrentBalance { get; set; }
+        public DateTime? LastReceiveDate { get; set; }
+        public DateTime? LastDeliveryDate { get; set; }
+    }
+
+    // ==========================================
+    // WORK ORDER WASH STATUS DTO
+    // ==========================================
+    public class WorkOrderWashStatusDto
+    {
+        public int WorkOrderId { get; set; }
+        public string WorkOrderNo { get; set; } = string.Empty;
+        public string StyleName { get; set; } = string.Empty;
+        public string Buyer { get; set; } = string.Empty;
+        public string Factory { get; set; } = string.Empty;
+        public string Line { get; set; } = string.Empty;
+        public string WashType { get; set; } = string.Empty;
+        public int OrderQuantity { get; set; }
+
+        // ✅ CHANGED: Now using Dictionary for dynamic stages
+        public Dictionary<string, ProcessBalanceDto> StageBalances { get; set; } = new();
+
+        // Overall summary
+        public int TotalReceived { get; set; }
+        public int TotalDelivered { get; set; }
+        public int OverallBalance { get; set; }
+        public decimal CompletionPercentage { get; set; }
+    }
+
+    // ==========================================
+    // FILTER DTO
+    // ==========================================
+    public class WashTransactionFilterDto
+    {
+        public int? WorkOrderId { get; set; }
+        public TransactionType? TransactionType { get; set; }
+        public int? ProcessStageId { get; set; }  // ✅ CHANGED
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+        public string? BatchNo { get; set; }
+    }
+
+    // ==========================================
+    // SUMMARY REPORT DTO
+    // ==========================================
+    public class ProcessStageSummaryDto
+    {
+        public int ProcessStageId { get; set; }  // ✅ CHANGED
+        public string ProcessStageName { get; set; } = string.Empty;
+        public int TotalReceiveCount { get; set; }
+        public int TotalDeliveryCount { get; set; }
+        public int TotalReceivedQty { get; set; }
+        public int TotalDeliveredQty { get; set; }
+        public int CurrentBalance { get; set; }
+    }
+}
+using System.ComponentModel.DataAnnotations;
+
+namespace wsahRecieveDelivary.DTOs
+{
+    // For Creating/Updating Single WorkOrder
+    public class WorkOrderDto
+    {
+        [Required]
+        public string Factory { get; set; } = string.Empty;
+
+        [Required]
+        public string Line { get; set; } = string.Empty;
+
+        [Required]
+        public string Unit { get; set; } = string.Empty;
+
+        [Required]
+        public string Buyer { get; set; } = string.Empty;
+
+        public string BuyerDepartment { get; set; } = string.Empty;
+
+        [Required]
+        public string StyleName { get; set; } = string.Empty;
+
+        public string FastReactNo { get; set; } = string.Empty;
+        public string Color { get; set; } = string.Empty;
+
+        [Required]
+        public string WorkOrderNo { get; set; } = string.Empty;
+
+        public string WashType { get; set; } = string.Empty;
+        public int OrderQuantity { get; set; }
+        public int CutQty { get; set; }
+
+        public DateTime? TOD { get; set; }
+        public DateTime? SewingCompDate { get; set; }
+        public DateTime? FirstRCVDate { get; set; }
+        public DateTime? WashApprovalDate { get; set; }
+        public DateTime? WashTargetDate { get; set; }
+
+        public int TotalWashReceived { get; set; }
+        public int TotalWashDelivery { get; set; }
+        public int WashBalance { get; set; }
+        public int FromReceived { get; set; }
+
+        public string? Marks { get; set; }
+    }
+
+    // For Excel Bulk Upload Response
+    public class WorkOrderBulkUploadResponseDto
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public int TotalRecords { get; set; }
+        public int SuccessCount { get; set; }
+        public int UpdatedCount { get; set; }
+        public int FailedCount { get; set; }
+        public List<string> Errors { get; set; } = new List<string>();
+    }
+
+    // For Getting WorkOrder Details
+    public class WorkOrderResponseDto
+    {
+        public int Id { get; set; }
+        public string Factory { get; set; } = string.Empty;
+        public string Line { get; set; } = string.Empty;
+        public string Unit { get; set; } = string.Empty;
+        public string Buyer { get; set; } = string.Empty;
+        public string BuyerDepartment { get; set; } = string.Empty;
+        public string StyleName { get; set; } = string.Empty;
+        public string FastReactNo { get; set; } = string.Empty;
+        public string Color { get; set; } = string.Empty;
+        public string WorkOrderNo { get; set; } = string.Empty;
+        public string WashType { get; set; } = string.Empty;
+        public int OrderQuantity { get; set; }
+        public int CutQty { get; set; }
+        public DateTime? TOD { get; set; }
+        public DateTime? SewingCompDate { get; set; }
+        public DateTime? FirstRCVDate { get; set; }
+        public DateTime? WashApprovalDate { get; set; }
+        public DateTime? WashTargetDate { get; set; }
+        public int TotalWashReceived { get; set; }
+        public int TotalWashDelivery { get; set; }
+        public int WashBalance { get; set; }
+        public int FromReceived { get; set; }
+        public string? Marks { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+        public string CreatedByUsername { get; set; } = string.Empty;
+        public string? UpdatedByUsername { get; set; }
+    }
+}
+using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.SwaggerGen;
+
+namespace wsahRecieveDelivary.Filters
+{
+    public class FileUploadOperationFilter : IOperationFilter
+    {
+        public void Apply(OpenApiOperation operation, OperationFilterContext context)
+        {
+            var fileParameters = context.ApiDescription.ParameterDescriptions
+                .Where(p => p.ModelMetadata?.ModelType == typeof(IFormFile))
+                .ToList();
+
+            if (!fileParameters.Any())
+                return;
+
+            operation.RequestBody = new OpenApiRequestBody
+            {
+                Content = new Dictionary<string, OpenApiMediaType>
+                {
+                    ["multipart/form-data"] = new OpenApiMediaType
+                    {
+                        Schema = new OpenApiSchema
+                        {
+                            Type = "object",
+                            Properties = fileParameters.ToDictionary(
+                                p => p.Name,
+                                p => new OpenApiSchema
+                                {
+                                    Type = "string",
+                                    Format = "binary"
+                                }
+                            ),
+                            Required = new HashSet<string>(fileParameters.Select(p => p.Name))
+                        }
+                    }
+                }
+            };
+        }
+    }
+}
+namespace wsahRecieveDelivary.Models.Enums
+{
+    public enum TransactionType
+    {
+        Receive = 1,
+        Delivery = 2
+    }
+}
+namespace wsahRecieveDelivary.Models
+{
+    public class Category
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public bool IsActive { get; set; } = true;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        public ICollection<UserCategoryAccess> UserCategoryAccesses { get; set; } = new List<UserCategoryAccess>();
+    }
+}
+using System.ComponentModel.DataAnnotations;
+
+namespace wsahRecieveDelivary.Models
+{
+    public class ProcessStage
+    {
+        public int Id { get; set; }
+
+        [Required]
+        [StringLength(100)]
+        public string Name { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? Description { get; set; }
+
+        [Required]
+        public int DisplayOrder { get; set; }
+
+        public bool IsActive { get; set; } = true;
+
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
+
+        // Navigation Properties
+        public ICollection<WashTransaction> WashTransactions { get; set; } = new List<WashTransaction>();
+        public ICollection<ProcessStageBalance> ProcessStageBalances { get; set; } = new List<ProcessStageBalance>();
+    }
+}
+namespace wsahRecieveDelivary.Models
+{
+    public class ProcessStageBalance
+    {
+        public int Id { get; set; }
+        public int WorkOrderId { get; set; }
+
+        // ✅ CHANGED: From enum to foreign key
+        public int ProcessStageId { get; set; }
+
+        public int TotalReceived { get; set; }
+        public int TotalDelivered { get; set; }
+        public int CurrentBalance { get; set; }
+
+        public DateTime? LastReceiveDate { get; set; }
+        public DateTime? LastDeliveryDate { get; set; }
+        public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+
+        // Navigation Properties
+        public WorkOrder WorkOrder { get; set; } = null!;
+        public ProcessStage ProcessStage { get; set; } = null!;
+    }
+}
+namespace wsahRecieveDelivary.Models 
+{
+    public class Role
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty; // Admin, User
+        public string? Description { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        // Navigation Properties
+        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
+    }
+}
+namespace wsahRecieveDelivary.Models
+{
+    public class User
+    {
+        public int Id { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string PasswordHash { get; set; } = string.Empty;
+        public bool IsActive { get; set; } = true;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
+
+        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
+        public ICollection<UserCategoryAccess> UserCategoryAccesses { get; set; } = new List<UserCategoryAccess>();
+    }
+}
+namespace wsahRecieveDelivary.Models
+{
+    public class UserCategoryAccess
+    {
+        public int Id { get; set; }
+        public int UserId { get; set; }
+        public int CategoryId { get; set; }
+        public bool CanView { get; set; } = true;
+        public bool CanEdit { get; set; } = false;
+        public bool CanDelete { get; set; } = false;
+        public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
+
+        public User User { get; set; } = null!;
+        public Category Category { get; set; } = null!;
+    }
+}
+namespace wsahRecieveDelivary.Models
+{
+    public class UserRole
+    {
+        public int Id { get; set; }
+        public int UserId { get; set; }
+        public int RoleId { get; set; }
+        public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
+
+        public User User { get; set; } = null!;
+        public Role Role { get; set; } = null!;
+    }
+}
+using System.ComponentModel.DataAnnotations;
+using wsahRecieveDelivary.Models.Enums;
+
+namespace wsahRecieveDelivary.Models
+{
+    public class WashTransaction
+    {
+        public int Id { get; set; }
+
+        [Required]
+        public int WorkOrderId { get; set; }
+
+        [Required]
+        public TransactionType TransactionType { get; set; }
+
+        // ✅ CHANGED: From enum to foreign key
+        [Required]
+        public int ProcessStageId { get; set; }
+
+        [Required]
+        [Range(1, int.MaxValue)]
+        public int Quantity { get; set; }
+
+        [Required]
+        public DateTime TransactionDate { get; set; } = DateTime.UtcNow;
+
+        [StringLength(100)]
+        public string? BatchNo { get; set; }
+
+        [StringLength(100)]
+        public string? GatePassNo { get; set; }
+
+        [StringLength(500)]
+        public string? Remarks { get; set; }
+
+        [StringLength(100)]
+        public string? ReceivedBy { get; set; }
+
+        [StringLength(100)]
+        public string? DeliveredTo { get; set; }
+
+        // Audit Fields
+        public int CreatedBy { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public int? UpdatedBy { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        // Navigation Properties
+        public WorkOrder WorkOrder { get; set; } = null!;
+        public ProcessStage ProcessStage { get; set; } = null!;
+        public User CreatedByUser { get; set; } = null!;
+        public User? UpdatedByUser { get; set; }
+    }
+}
+using System.ComponentModel.DataAnnotations;
+
+namespace wsahRecieveDelivary.Models
+{
+    public class WorkOrder
+    {
+        public int Id { get; set; }
+
+        // Factory Information
+        [Required]
+        [StringLength(100)]
+        public string Factory { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(100)]
+        public string Line { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(100)]
+        public string Unit { get; set; } = string.Empty;
+
+        // Buyer Information
+        [Required]
+        [StringLength(100)]
+        public string Buyer { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string BuyerDepartment { get; set; } = string.Empty;
+
+        // Style Information
+        [Required]
+        [StringLength(200)]
+        public string StyleName { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string FastReactNo { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string Color { get; set; } = string.Empty;
+
+        // Work Order Information
+        [Required]
+        [StringLength(100)]
+        public string WorkOrderNo { get; set; } = string.Empty;  // Unique identifier
+
+        [StringLength(100)]
+        public string WashType { get; set; } = string.Empty;
+
+        // Quantities
+        public int OrderQuantity { get; set; }
+        public int CutQty { get; set; }
+
+        // Dates
+        public DateTime? TOD { get; set; }  // Target Order Date
+        public DateTime? SewingCompDate { get; set; }
+        public DateTime? FirstRCVDate { get; set; }
+        public DateTime? WashApprovalDate { get; set; }
+        public DateTime? WashTargetDate { get; set; }
+
+        // Wash Information
+        public int TotalWashReceived { get; set; }
+        public int TotalWashDelivery { get; set; }
+        public int WashBalance { get; set; }
+        public int FromReceived { get; set; }
+
+        // Additional Information
+        [StringLength(500)]
+        public string? Marks { get; set; }
+
+        // Audit Fields
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
+        public int CreatedBy { get; set; }  // User ID
+        public int? UpdatedBy { get; set; }  // User ID
+
+        // Navigation Properties
+        public User CreatedByUser { get; set; } = null!;
+        public User? UpdatedByUser { get; set; }
+    }
+}
+D:\test c#\wsahRecieveDelivary\Services\
+using Microsoft.EntityFrameworkCore;
+using wsahRecieveDelivary.Data;
+using wsahRecieveDelivary.DTOs;
+using wsahRecieveDelivary.Models;
+
+namespace wsahRecieveDelivary.Services
+{
+    public class AuthService : IAuthService
+    {
+        private readonly ApplicationDbContext _context;
+        private readonly IJwtService _jwtService;
+
+        public AuthService(ApplicationDbContext context, IJwtService jwtService)
+        {
+            _context = context;
+            _jwtService = jwtService;
+        }
+
+        public async Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto)
+        {
+            // Check if username exists
+            if (await _context.Users.AnyAsync(u => u.Username == registerDto.Username))
+            {
+                return new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "Username already exists"
+                };
+            }
+
+            // Check if email exists
+            if (await _context.Users.AnyAsync(u => u.Email == registerDto.Email))
+            {
+                return new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "Email already exists"
+                };
+            }
+
+            // Create new user
+            var user = new User
+            {
+                FullName = registerDto.FullName,
+                Username = registerDto.Username,
+                Email = registerDto.Email,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(registerDto.Password),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Assign roles
+            if (registerDto.RoleIds.Any())
+            {
+                foreach (var roleId in registerDto.RoleIds)
+                {
+                    _context.UserRoles.Add(new UserRole
+                    {
+                        UserId = user.Id,
+                        RoleId = roleId
+                    });
+                }
+            }
+            else
+            {
+                // Default role: User (RoleId = 2)
+                _context.UserRoles.Add(new UserRole
+                {
+                    UserId = user.Id,
+                    RoleId = 2
+                });
+            }
+
+            await _context.SaveChangesAsync();
+
+            // Check if user is Admin
+            var isAdmin = registerDto.RoleIds.Contains(1); // RoleId 1 = Admin
+
+            // Assign category access
+            if (isAdmin)
+            {
+                // Admin gets ALL categories automatically
+                var allCategories = await _context.Categories.Where(c => c.IsActive).ToListAsync();
+                foreach (var category in allCategories)
+                {
+                    _context.UserCategoryAccesses.Add(new UserCategoryAccess
+                    {
+                        UserId = user.Id,
+                        CategoryId = category.Id,
+                        CanView = true,
+                        CanEdit = true,
+                        CanDelete = true
+                    });
+                }
+            }
+            else
+            {
+                // User gets specific categories only
+                if (registerDto.CategoryIds.Any())
+                {
+                    foreach (var categoryId in registerDto.CategoryIds)
+                    {
+                        _context.UserCategoryAccesses.Add(new UserCategoryAccess
+                        {
+                            UserId = user.Id,
+                            CategoryId = categoryId,
+                            CanView = true,
+                            CanEdit = false,
+                            CanDelete = false
+                        });
+                    }
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            return new AuthResponseDto
+            {
+                Success = true,
+                Message = "User registered successfully"
+            };
+        }
+
+        public async Task<AuthResponseDto> LoginAsync(LoginDto loginDto)
+        {
+            // Find user by username OR email
+            var user = await _context.Users
+                .Include(u => u.UserRoles)
+                    .ThenInclude(ur => ur.Role)
+                .Include(u => u.UserCategoryAccesses)
+                    .ThenInclude(uca => uca.Category)
+                .FirstOrDefaultAsync(u => u.Username == loginDto.Username || u.Email == loginDto.Username);
+
+            if (user == null)
+            {
+                return new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "Invalid username or password"
+                };
+            }
+
+            // Check if user is active
+            if (!user.IsActive)
+            {
+                return new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "User account is inactive"
+                };
+            }
+
+            // Verify password
+            if (!BCrypt.Net.BCrypt.Verify(loginDto.Password, user.PasswordHash))
+            {
+                return new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "Invalid username or password"
+                };
+            }
+
+            // Get roles
+            var roles = user.UserRoles.Select(ur => ur.Role.Name).ToList();
+            var isAdmin = roles.Contains("Admin");
+
+            // Get categories
+            List<string> categories;
+            List<CategoryAccessDto> categoryAccesses;
+
+            if (isAdmin)
+            {
+                // Admin gets ALL categories
+                var allCategories = await _context.Categories.Where(c => c.IsActive).ToListAsync();
+                categories = allCategories.Select(c => c.Name).ToList();
+                categoryAccesses = allCategories.Select(c => new CategoryAccessDto
+                {
+                    CategoryId = c.Id,
+                    CategoryName = c.Name,
+                    CanView = true,
+                    CanEdit = true,
+                    CanDelete = true
+                }).ToList();
+            }
+            else
+            {
+                // User gets assigned categories only
+                categories = user.UserCategoryAccesses
+                    .Where(uca => uca.Category.IsActive)
+                    .Select(uca => uca.Category.Name)
+                    .ToList();
+
+                categoryAccesses = user.UserCategoryAccesses
+                    .Where(uca => uca.Category.IsActive)
+                    .Select(uca => new CategoryAccessDto
+                    {
+                        CategoryId = uca.CategoryId,
+                        CategoryName = uca.Category.Name,
+                        CanView = uca.CanView,
+                        CanEdit = uca.CanEdit,
+                        CanDelete = uca.CanDelete
+                    }).ToList();
+            }
+
+            // Generate token
+            var token = _jwtService.GenerateToken(user, roles, categories);
+
+            return new AuthResponseDto
+            {
+                Success = true,
+                Message = "Login successful",
+                Token = token,
+                User = new UserInfoDto
+                {
+                    Id = user.Id,
+                    FullName = user.FullName,
+                    Username = user.Username,
+                    Email = user.Email,
+                    Roles = roles,
+                    CategoryAccesses = categoryAccesses
+                }
+            };
+        }
+    }
+}
+using wsahRecieveDelivary.DTOs;
+
+namespace wsahRecieveDelivary.Services
+{
+    public interface IAuthService
+    {
+        Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto);
+        Task<AuthResponseDto> LoginAsync(LoginDto loginDto);
+    }
+}
+using wsahRecieveDelivary.Models;
+
+namespace wsahRecieveDelivary.Services
+{
+    public interface IJwtService
+    {
+        string GenerateToken(User user, List<string> roles, List<string> categories);
+    }
+}
+using wsahRecieveDelivary.DTOs;
+
+namespace wsahRecieveDelivary.Services
+{
+    public interface IWashTransactionService
+    {
+        // Create
+        Task<WashTransactionResponseDto> CreateReceiveAsync(CreateWashTransactionDto dto, int userId);
+        Task<WashTransactionResponseDto> CreateDeliveryAsync(CreateWashTransactionDto dto, int userId);
+
+        // Read
+        Task<WashTransactionResponseDto?> GetByIdAsync(int id);
+        Task<List<WashTransactionResponseDto>> GetAllAsync();
+        Task<List<WashTransactionResponseDto>> GetByWorkOrderAsync(int workOrderId);
+        Task<List<WashTransactionResponseDto>> GetByStageAsync(int processStageId);  // ✅ CHANGED
+        Task<List<WashTransactionResponseDto>> GetByFilterAsync(WashTransactionFilterDto filter);
+
+        // Update/Delete
+        Task<WashTransactionResponseDto> UpdateAsync(int id, CreateWashTransactionDto dto, int userId);
+        Task<bool> DeleteAsync(int id);
+
+        // Balance & Status
+        Task<List<ProcessBalanceDto>> GetBalancesByWorkOrderAsync(int workOrderId);
+        Task<WorkOrderWashStatusDto?> GetWashStatusAsync(int workOrderId);
+        Task<List<WorkOrderWashStatusDto>> GetAllWashStatusesAsync();
+
+        // Reports
+        Task<List<ProcessStageSummaryDto>> GetStageSummaryAsync();
+        Task<List<WashTransactionResponseDto>> GetReceivesByStageAsync(int processStageId, DateTime? startDate = null, DateTime? endDate = null);  // ✅ CHANGED
+        Task<List<WashTransactionResponseDto>> GetDeliveriesByStageAsync(int processStageId, DateTime? startDate = null, DateTime? endDate = null);  // ✅ CHANGED
+    }
+}
+using Microsoft.AspNetCore.Http;
+using wsahRecieveDelivary.DTOs;
+
+namespace wsahRecieveDelivary.Services
+{
+    public interface IWorkOrderService
+    {
+        Task<WorkOrderResponseDto> CreateAsync(WorkOrderDto dto, int userId);
+        Task<WorkOrderResponseDto> UpdateAsync(int id, WorkOrderDto dto, int userId);
+        Task<bool> DeleteAsync(int id);
+        Task<WorkOrderResponseDto?> GetByIdAsync(int id);
+        Task<WorkOrderResponseDto?> GetByWorkOrderNoAsync(string workOrderNo);
+        Task<List<WorkOrderResponseDto>> GetAllAsync();
+        Task<WorkOrderBulkUploadResponseDto> BulkUploadFromExcelAsync(IFormFile file, int userId);
+    }
+}
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using wsahRecieveDelivary.Models;
+
+namespace wsahRecieveDelivary.Services
+{
+    public class JwtService : IJwtService
+    {
+        private readonly IConfiguration _configuration;
+
+        public JwtService(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
+
+        public string GenerateToken(User user, List<string> roles, List<string> categories)
+        {
+            var claims = new List<Claim>
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Email, user.Email),
+                new Claim("FullName", user.FullName)
+            };
+
+            // Add roles
+            foreach (var role in roles)
+            {
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
+
+            // Add categories
+            foreach (var category in categories)
+            {
+                claims.Add(new Claim("Category", category));
+            }
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(
+                _configuration["JwtSettings:SecretKey"] ?? throw new InvalidOperationException("JWT Secret Key not found")));
+
+            var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                issuer: _configuration["JwtSettings:Issuer"],
+                audience: _configuration["JwtSettings:Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(24),
+                signingCredentials: credentials
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+    }
+}
+

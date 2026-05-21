@@ -1,0 +1,2164 @@
+﻿# 📚 Complete Training Document: Dynamic Wash Transaction Management System
+
+## System Overview
+
+This is a professional ASP.NET Core 8.0 Web API system for managing garment wash transactions through multiple processing stages. The system features dynamic process stage management, real-time balance tracking, role-based access control, and comprehensive audit trails.
+
+---
+
+## 🏗️ Architecture
+
+### Technology Stack
+- **Framework**: ASP.NET Core 8.0 Web API
+- **Database**: SQL Server (Entity Framework Core)
+- **Authentication**: JWT Bearer Token
+- **Password Hashing**: BCrypt
+- **Documentation**: Swagger/OpenAPI
+- **File Processing**: EPPlus (Excel)
+- **ORM**: Entity Framework Core 8.0
+
+### Design Pattern
+- Repository Pattern (via EF Core DbContext)
+- Service Layer Architecture
+- DTO (Data Transfer Objects) Pattern
+- Dependency Injection
+- RESTful API Design
+
+---
+
+## 📊 Database Schema
+
+### Core Tables
+
+#### 1. **Users**
+```
+Primary Key: Id (int, identity)
+Fields:
+  - FullName (nvarchar(200), required)
+  - Username (nvarchar(50), unique, required)
+  - Email (nvarchar(100), unique, required)
+  - PasswordHash (nvarchar(max), BCrypt hashed)
+  - IsActive (bit, default: true)
+  - CreatedAt (datetime2, default: GETUTCDATE())
+  - UpdatedAt (datetime2, nullable)
+```
+
+#### 2. **Roles**
+```
+Primary Key: Id (int, identity)
+Fields:
+  - Name (nvarchar(50), unique, required)
+  - Description (nvarchar(max), nullable)
+  - CreatedAt (datetime2)
+
+Seed Data:
+  - Id: 1, Name: "Admin", Description: "Full system access"
+  - Id: 2, Name: "User", Description: "Limited access based on category"
+```
+
+#### 3. **UserRoles** (Many-to-Many)
+```
+Primary Key: Id (int, identity)
+Foreign Keys:
+  - UserId → Users.Id (cascade delete)
+  - RoleId → Roles.Id (cascade delete)
+Unique Constraint: (UserId, RoleId)
+Fields:
+  - AssignedAt (datetime2)
+```
+
+#### 4. **Categories**
+```
+Primary Key: Id (int, identity)
+Fields:
+  - Name (nvarchar(100), unique, required)
+  - Description (nvarchar(max), nullable)
+  - IsActive (bit, default: true)
+  - CreatedAt (datetime2)
+
+Seed Data:
+  - Id: 1, Name: "1st Dry"
+  - Id: 2, Name: "Unwash"
+  - Id: 3, Name: "2nd Dry"
+  - Id: 4, Name: "1st Wash"
+  - Id: 5, Name: "Final Wash"
+
+Purpose: User access control - which categories a user can access
+```
+
+#### 5. **UserCategoryAccesses** (Many-to-Many)
+```
+Primary Key: Id (int, identity)
+Foreign Keys:
+  - UserId → Users.Id (cascade delete)
+  - CategoryId → Categories.Id (cascade delete)
+Unique Constraint: (UserId, CategoryId)
+Fields:
+  - CanView (bit, default: true)
+  - CanEdit (bit, default: false)
+  - CanDelete (bit, default: false)
+  - AssignedAt (datetime2)
+
+Business Rules:
+  - Admin users get ALL categories automatically with full permissions
+  - Regular users get specific categories with limited permissions
+```
+
+#### 6. **ProcessStages** ⭐ (Dynamic - Core Feature)
+```
+Primary Key: Id (int, identity)
+Fields:
+  - Name (nvarchar(100), unique, required)
+  - Description (nvarchar(200), nullable)
+  - DisplayOrder (int, required)
+  - IsActive (bit, default: true)
+  - CreatedAt (datetime2, default: GETUTCDATE())
+  - UpdatedAt (datetime2, nullable)
+
+Indexes:
+  - Unique: Name
+  - Non-Unique: DisplayOrder
+
+Seed Data:
+  - Id: 1, Name: "1st Dry", DisplayOrder: 1
+  - Id: 2, Name: "Unwash", DisplayOrder: 2
+  - Id: 3, Name: "2nd Dry", DisplayOrder: 3
+  - Id: 4, Name: "1st Wash", DisplayOrder: 4
+  - Id: 5, Name: "Final Wash", DisplayOrder: 5
+
+Key Feature: NEW STAGES CAN BE ADDED VIA API WITHOUT CODE CHANGES!
+```
+
+#### 7. **WorkOrders**
+```
+Primary Key: Id (int, identity)
+Foreign Keys:
+  - CreatedBy → Users.Id (restrict delete)
+  - UpdatedBy → Users.Id (restrict delete)
+
+Fields:
+  - Factory (nvarchar(100), required) - e.g., "TAL"
+  - Line (nvarchar(100), required) - e.g., "Line A"
+  - Unit (nvarchar(100), required) - e.g., "Unit 1"
+  - Buyer (nvarchar(100), required) - e.g., "Zara"
+  - BuyerDepartment (nvarchar(100)) - e.g., "Zara TRF"
+  - StyleName (nvarchar(200), required) - e.g., "FOLDED WAISTBAND"
+  - FastReactNo (nvarchar(100)) - e.g., "68051-D::Blue-400"
+  - Color (nvarchar(100)) - e.g., "Blue-400"
+  - WorkOrderNo (nvarchar(100), unique, required) - e.g., "WO-001"
+  - WashType (nvarchar(100)) - e.g., "Acid Wash"
+  - OrderQuantity (int) - Total order quantity
+  - CutQty (int) - Quantity cut for production
+  - TOD (datetime2, nullable) - Target Order Date
+  - SewingCompDate (datetime2, nullable) - Sewing completion date
+  - FirstRCVDate (datetime2, nullable) - First receive date
+  - WashApprovalDate (datetime2, nullable) - Wash approval date
+  - WashTargetDate (datetime2, nullable) - Wash target date
+  - TotalWashReceived (int, default: 0)
+  - TotalWashDelivery (int, default: 0)
+  - WashBalance (int, default: 0)
+  - FromReceived (int, default: 0)
+  - Marks (nvarchar(500), nullable) - Additional notes
+  - CreatedAt (datetime2, default: GETUTCDATE())
+  - UpdatedAt (datetime2, nullable)
+
+Indexes:
+  - Unique: WorkOrderNo
+  - Composite: (Factory, Line, WorkOrderNo)
+  - Composite: (Buyer, WorkOrderNo)
+
+Bulk Upload: Supports Excel upload via API
+```
+
+#### 8. **WashTransactions** ⭐ (Main Transaction Table)
+```
+Primary Key: Id (int, identity)
+Foreign Keys:
+  - WorkOrderId → WorkOrders.Id (cascade delete)
+  - ProcessStageId → ProcessStages.Id (restrict delete) ⭐
+  - CreatedBy → Users.Id (restrict delete)
+  - UpdatedBy → Users.Id (restrict delete)
+
+Fields:
+  - TransactionType (nvarchar(20), enum as string: "Receive" or "Delivery")
+  - ProcessStageId (int, required) ⭐ - References ProcessStages.Id
+  - Quantity (int, required, range: 1 to max)
+  - TransactionDate (datetime2, required, default: GETUTCDATE())
+  - BatchNo (nvarchar(100), nullable) - Batch/Lot number
+  - GatePassNo (nvarchar(100), nullable) - Gate pass for delivery
+  - Remarks (nvarchar(500), nullable)
+  - ReceivedBy (nvarchar(100), nullable) - Person who received
+  - DeliveredTo (nvarchar(100), nullable) - Department/vendor delivered to
+  - CreatedAt (datetime2, default: GETUTCDATE())
+  - UpdatedAt (datetime2, nullable)
+  - IsActive (bit, default: true) - For soft delete
+
+Indexes:
+  - WorkOrderId
+  - ProcessStageId
+  - TransactionDate
+  - BatchNo
+  - Composite: (WorkOrderId, ProcessStageId, TransactionType)
+
+Business Rules:
+  - Receive: Adds quantity to stage balance
+  - Delivery: Subtracts quantity from stage balance
+  - Delivery validation: Current balance must be >= delivery quantity
+  - Soft delete: IsActive = false preserves audit trail
+```
+
+#### 9. **ProcessStageBalances** ⭐ (Auto-calculated)
+```
+Primary Key: Id (int, identity)
+Foreign Keys:
+  - WorkOrderId → WorkOrders.Id (cascade delete)
+  - ProcessStageId → ProcessStages.Id (restrict delete) ⭐
+
+Fields:
+  - TotalReceived (int, default: 0)
+  - TotalDelivered (int, default: 0)
+  - CurrentBalance (int, default: 0) - Calculated: Received - Delivered
+  - LastReceiveDate (datetime2, nullable)
+  - LastDeliveryDate (datetime2, nullable)
+  - LastUpdated (datetime2, default: GETUTCDATE())
+
+Unique Constraint: (WorkOrderId, ProcessStageId)
+
+Business Logic:
+  - ONE balance record per work order per process stage
+  - Auto-updated after every transaction
+  - Recalculated from active transactions only
+```
+
+---
+
+## 🔐 Authentication & Authorization
+
+### JWT Token Configuration
+```
+Issuer: "wsahRecieveDelivary"
+Audience: "wsahRecieveDelivaryUsers"
+Expiration: 24 hours
+Signing Algorithm: HMAC SHA256
+```
+
+### Token Claims
+```
+- NameIdentifier: User.Id
+- Name: User.Username
+- Email: User.Email
+- FullName: User.FullName
+- Role: Multiple role claims (e.g., "Admin", "User")
+- Category: Multiple category claims (e.g., "1st Dry", "Unwash")
+```
+
+### Authorization Rules
+```
+Admin Role:
+  - Full system access
+  - Can create/update/delete work orders
+  - Can create/update/delete process stages
+  - Automatically gets ALL categories with full permissions
+  - Can manage users and roles
+
+User Role:
+  - Limited access based on assigned categories
+  - Can view assigned categories only
+  - Cannot create/update/delete work orders
+  - Cannot manage process stages
+  - Can create transactions in assigned categories
+```
+
+---
+
+## 🎯 Core Business Logic
+
+### Work Order Management
+
+#### Create Work Order
+```
+Endpoint: POST /api/WorkOrder
+Authorization: Admin only
+Validation:
+  - WorkOrderNo must be unique
+  - Required fields: Factory, Line, Unit, Buyer, StyleName, WorkOrderNo
+Process:
+  1. Validate WorkOrderNo uniqueness
+  2. Create WorkOrder record
+  3. Set CreatedBy = current user ID
+  4. Set CreatedAt = UTC now
+Returns: WorkOrderResponseDto with complete details
+```
+
+#### Bulk Upload Work Orders (Excel)
+```
+Endpoint: POST /api/WorkOrder/bulk-upload
+Authorization: Admin only
+File Format: .xlsx or .xls
+Columns (22):
+  1. Factory
+  2. Line
+  3. Unit
+  4. Buyer
+  5. Buyer Department
+  6. Style Name
+  7. FastReact No
+  8. Color
+  9. Work Order No (unique identifier)
+  10. Wash Type
+  11. Order Quantity
+  12. Cut Qty
+  13. TOD (date)
+  14. Sewing Comp. Date (date)
+  15. 1st RCV Date (date)
+  16. Wash Approval Date (date)
+  17. Wash Target Date (date)
+  18. Total Wash Received
+  19. Total Wash Delivery
+  20. Wash Balance
+  21. From Received
+  22. Marks
+
+Process:
+  1. Validate file format
+  2. Parse Excel rows
+  3. For each row:
+     - Check if WorkOrderNo exists
+     - If exists: UPDATE existing record (UpdatedCount++)
+     - If not: CREATE new record (SuccessCount++)
+     - If error: Log error (FailedCount++)
+  4. Return summary: TotalRecords, SuccessCount, UpdatedCount, FailedCount, Errors[]
+
+Date Parsing Formats:
+  - dd-MMM-yy (e.g., "30-Oct-25")
+  - dd-MMM-yyyy (e.g., "30-Oct-2025")
+  - dd/MM/yyyy
+  - yyyy-MM-dd
+  - dd-MM-yyyy
+  - MM/dd/yyyy
+
+Numeric Parsing:
+  - Removes commas from numbers (e.g., "15,000" → 15000)
+```
+
+---
+
+### Transaction Management ⭐
+
+#### Create Receive Transaction
+```
+Endpoint: POST /api/WashTransaction/receive
+Authorization: Authenticated user
+Input DTO:
+  - workOrderId (required)
+  - transactionType: 1 (Receive)
+  - processStageId (required) ⭐ - Any valid stage ID
+  - quantity (required, > 0)
+  - transactionDate (optional, default: now)
+  - batchNo (optional)
+  - gatePassNo (optional)
+  - remarks (optional)
+  - receivedBy (optional)
+
+Process:
+  1. Validate workOrderId exists
+  2. Validate processStageId exists ⭐
+  3. Create WashTransaction record with TransactionType = Receive
+  4. Call UpdateStageBalanceAsync(workOrderId, processStageId)
+     - Find/Create ProcessStageBalance record
+     - Recalculate TotalReceived = SUM(Receive quantities)
+     - Recalculate CurrentBalance = TotalReceived - TotalDelivered
+     - Update LastReceiveDate
+  5. Return transaction details
+
+No Balance Validation: Receive transactions always succeed
+```
+
+#### Create Delivery Transaction
+```
+Endpoint: POST /api/WashTransaction/delivery
+Authorization: Authenticated user
+Input DTO:
+  - workOrderId (required)
+  - transactionType: 2 (Delivery)
+  - processStageId (required) ⭐
+  - quantity (required, > 0)
+  - transactionDate (optional, default: now)
+  - batchNo (optional)
+  - gatePassNo (optional)
+  - remarks (optional)
+  - deliveredTo (optional)
+
+Process:
+  1. Validate workOrderId exists
+  2. Validate processStageId exists ⭐
+  3. Get current balance: GetCurrentBalanceAsync(workOrderId, processStageId)
+  4. VALIDATE: currentBalance >= quantity
+     - If insufficient: throw InvalidOperationException with message
+  5. Create WashTransaction record with TransactionType = Delivery
+  6. Call UpdateStageBalanceAsync(workOrderId, processStageId)
+     - Recalculate TotalDelivered = SUM(Delivery quantities)
+     - Recalculate CurrentBalance = TotalReceived - TotalDelivered
+     - Update LastDeliveryDate
+  7. Return transaction details
+
+Balance Validation: Prevents over-delivery
+```
+
+#### Update Transaction
+```
+Endpoint: PUT /api/WashTransaction/{id}
+Authorization: Admin only
+Process:
+  1. Find existing transaction
+  2. Store old processStageId
+  3. Update transaction fields
+  4. If processStageId changed:
+     - Update balance for OLD stage
+     - Update balance for NEW stage
+  5. If processStageId same:
+     - Update balance for current stage
+  6. Return updated transaction
+```
+
+#### Delete Transaction (Soft Delete)
+```
+Endpoint: DELETE /api/WashTransaction/{id}
+Authorization: Admin only
+Process:
+  1. Find transaction
+  2. Set IsActive = false
+  3. Set UpdatedAt = now
+  4. Update stage balance (recalculates from active transactions only)
+  5. Return success
+
+Soft Delete: Preserves audit trail and data integrity
+```
+
+---
+
+### Balance Calculation Logic ⭐
+
+#### UpdateStageBalanceAsync(workOrderId, processStageId)
+```
+Process:
+  1. Find or create ProcessStageBalance record for (workOrderId, processStageId)
+  2. Query all ACTIVE transactions:
+     WHERE WorkOrderId = @workOrderId 
+       AND ProcessStageId = @processStageId 
+       AND IsActive = true
+  3. Calculate:
+     TotalReceived = SUM(Quantity WHERE TransactionType = 'Receive')
+     TotalDelivered = SUM(Quantity WHERE TransactionType = 'Delivery')
+     CurrentBalance = TotalReceived - TotalDelivered
+  4. Update:
+     LastReceiveDate = MAX(TransactionDate WHERE TransactionType = 'Receive')
+     LastDeliveryDate = MAX(TransactionDate WHERE TransactionType = 'Delivery')
+     LastUpdated = UTC now
+  5. Save changes
+
+Key Points:
+  - Only counts IsActive = true transactions
+  - Automatically handles soft-deleted transactions
+  - Idempotent: Can be called multiple times safely
+  - Atomic: Within database transaction
+```
+
+```markdown
+#### GetWashStatusAsync(workOrderId)
+```
+Process:
+  1. Validate workOrderId exists
+  2. Query all ProcessStageBalances for this work order
+  3. Load all ProcessStages (ordered by DisplayOrder)
+  4. Build response:
+     - WorkOrder basic info (WorkOrderNo, StyleName, Buyer, etc.)
+     - StageBalances = Dictionary<string, ProcessBalanceDto>
+       - Key: ProcessStage.Name (e.g., "1st Dry", "Unwash")
+       - Value: Balance details (Received, Delivered, Balance)
+     - For stages with NO transactions: Create empty balance (0, 0, 0)
+     - For stages WITH transactions: Map from ProcessStageBalances
+  5. Calculate totals:
+     TotalReceived = SUM(all stage balances.TotalReceived)
+     TotalDelivered = SUM(all stage balances.TotalDelivered)
+     OverallBalance = SUM(all stage balances.CurrentBalance)
+     CompletionPercentage = (TotalDelivered / OrderQuantity) * 100
+  6. Return WorkOrderWashStatusDto
+
+Response Structure:
+{
+  "workOrderId": 1,
+  "workOrderNo": "WO-001",
+  "orderQuantity": 5000,
+  "stageBalances": {
+    "1st Dry": {
+      "processStageId": 1,
+      "processStageName": "1st Dry",
+      "totalReceived": 1000,
+      "totalDelivered": 500,
+      "currentBalance": 500,
+      "lastReceiveDate": "2025-11-09T08:00:00Z",
+      "lastDeliveryDate": "2025-11-09T10:00:00Z"
+    },
+    "Unwash": {
+      "processStageId": 2,
+      "processStageName": "Unwash",
+      "totalReceived": 800,
+      "totalDelivered": 0,
+      "currentBalance": 800
+    },
+    ... (all 5+ stages dynamically included)
+  },
+  "totalReceived": 1800,
+  "totalDelivered": 500,
+  "overallBalance": 1300,
+  "completionPercentage": 10.0
+}
+
+Key Feature: Automatically includes ALL process stages from database
+```
+
+---
+
+### Query & Reporting
+
+#### Get Transactions by Stage
+```
+Endpoint: GET /api/WashTransaction/stage/{processStageId}
+Authorization: Authenticated user
+Process:
+  1. Query WashTransactions WHERE ProcessStageId = @processStageId AND IsActive = true
+  2. Include: WorkOrder, ProcessStage, CreatedByUser
+  3. Order by TransactionDate DESC
+  4. Map to WashTransactionResponseDto[]
+  5. Return with count
+
+Dynamic: Works for ANY process stage ID (including newly added ones)
+```
+
+#### Filter Transactions
+```
+Endpoint: POST /api/WashTransaction/filter
+Authorization: Authenticated user
+Input DTO:
+  - workOrderId (optional)
+  - transactionType (optional: 1=Receive, 2=Delivery)
+  - processStageId (optional) ⭐
+  - startDate (optional)
+  - endDate (optional)
+  - batchNo (optional)
+
+Process:
+  1. Start with base query: WashTransactions WHERE IsActive = true
+  2. Apply filters dynamically:
+     - IF workOrderId: AND WorkOrderId = @workOrderId
+     - IF transactionType: AND TransactionType = @transactionType
+     - IF processStageId: AND ProcessStageId = @processStageId ⭐
+     - IF startDate: AND TransactionDate >= @startDate
+     - IF endDate: AND TransactionDate <= @endDate
+     - IF batchNo: AND BatchNo = @batchNo
+  3. Order by TransactionDate DESC
+  4. Return filtered results with count
+```
+
+#### Stage Summary Report
+```
+Endpoint: GET /api/WashTransaction/summary/stages
+Authorization: Authenticated user
+Process:
+  1. Load all ACTIVE ProcessStages from database (ordered by DisplayOrder)
+  2. For each stage:
+     - Query all active transactions for this stage
+     - Calculate:
+       TotalReceiveCount = COUNT(WHERE TransactionType = 'Receive')
+       TotalDeliveryCount = COUNT(WHERE TransactionType = 'Delivery')
+       TotalReceivedQty = SUM(Quantity WHERE TransactionType = 'Receive')
+       TotalDeliveredQty = SUM(Quantity WHERE TransactionType = 'Delivery')
+       CurrentBalance = TotalReceivedQty - TotalDeliveredQty
+  3. Return array of ProcessStageSummaryDto
+
+Response Example:
+[
+  {
+    "processStageId": 1,
+    "processStageName": "1st Dry",
+    "totalReceiveCount": 15,
+    "totalDeliveryCount": 12,
+    "totalReceivedQty": 50000,
+    "totalDeliveredQty": 45000,
+    "currentBalance": 5000
+  },
+  {
+    "processStageId": 2,
+    "processStageName": "Unwash",
+    "totalReceiveCount": 12,
+    "totalDeliveryCount": 10,
+    "totalReceivedQty": 45000,
+    "totalDeliveredQty": 40000,
+    "currentBalance": 5000
+  },
+  ... (dynamically includes all stages)
+]
+
+Key Feature: Report automatically adapts to new stages
+```
+
+---
+
+## 🔄 Dynamic Process Stage Management ⭐
+
+### The Problem This Solves
+```
+Traditional Approach (ENUM):
+  - Process stages hard-coded in code
+  - Adding new stage requires:
+    ✗ Code modification
+    ✗ Recompilation
+    ✗ Deployment
+    ✗ Database migration
+    ✗ Downtime
+
+Dynamic Approach (TABLE):
+  - Process stages stored in database
+  - Adding new stage requires:
+    ✓ Simple API call
+    ✓ No code changes
+    ✓ No recompilation
+    ✓ No deployment
+    ✓ Zero downtime
+```
+
+### Create New Process Stage
+```
+Endpoint: POST /api/ProcessStage
+Authorization: Admin only
+Input:
+{
+  "name": "Pre-Wash",
+  "description": "Pre-wash treatment before 1st Dry",
+  "displayOrder": 6,
+  "isActive": true
+}
+
+Process:
+  1. Validate name uniqueness
+  2. Create ProcessStage record
+  3. Automatically create matching Category for user access control
+  4. Return created stage
+
+Immediate Effect:
+  - Stage available in ALL APIs instantly
+  - Stage appears in wash status reports
+  - Stage available for transactions
+  - Stage included in summaries
+  - NO CODE CHANGES NEEDED!
+
+Example Response:
+{
+  "success": true,
+  "message": "Process stage created",
+  "data": {
+    "id": 6,
+    "name": "Pre-Wash",
+    "description": "Pre-wash treatment before 1st Dry",
+    "displayOrder": 6,
+    "isActive": true,
+    "createdAt": "2025-11-09T12:00:00Z"
+  }
+}
+```
+
+### Update Process Stage
+```
+Endpoint: PUT /api/ProcessStage/{id}
+Authorization: Admin only
+Process:
+  1. Find existing stage
+  2. Update: Name, Description, DisplayOrder, IsActive
+  3. Set UpdatedAt = now
+  4. Save changes
+
+Use Cases:
+  - Rename stage
+  - Change display order (affects reporting order)
+  - Deactivate stage (hide but preserve data)
+```
+
+### Deactivate Process Stage
+```
+Endpoint: DELETE /api/ProcessStage/{id}
+Authorization: Admin only
+Process:
+  1. Find stage
+  2. Set IsActive = false
+  3. Set UpdatedAt = now
+
+Effect:
+  - Stage hidden from active lists
+  - Existing transactions preserved
+  - Existing balances preserved
+  - Can be reactivated by setting IsActive = true
+
+Soft Delete: Data integrity maintained
+```
+
+### List Process Stages
+```
+Endpoint: GET /api/ProcessStage
+Authorization: Authenticated user
+Process:
+  1. Query ProcessStages WHERE IsActive = true
+  2. Order by DisplayOrder
+  3. Return array
+
+Response:
+[
+  {"id": 1, "name": "1st Dry", "displayOrder": 1},
+  {"id": 2, "name": "Unwash", "displayOrder": 2},
+  {"id": 3, "name": "2nd Dry", "displayOrder": 3},
+  {"id": 4, "name": "1st Wash", "displayOrder": 4},
+  {"id": 5, "name": "Final Wash", "displayOrder": 5},
+  {"id": 6, "name": "Pre-Wash", "displayOrder": 6} ← Newly added
+]
+```
+
+---
+
+## 📝 Data Transfer Objects (DTOs)
+
+### CreateWashTransactionDto
+```csharp
+{
+  "workOrderId": int (required),
+  "transactionType": int (1=Receive, 2=Delivery) (required),
+  "processStageId": int (required), // ⭐ Dynamic - any valid stage ID
+  "quantity": int (required, min: 1),
+  "transactionDate": DateTime? (optional, default: now),
+  "batchNo": string? (max: 100),
+  "gatePassNo": string? (max: 100),
+  "remarks": string? (max: 500),
+  "receivedBy": string? (max: 100),
+  "deliveredTo": string? (max: 100)
+}
+```
+
+### WashTransactionResponseDto
+```csharp
+{
+  "id": int,
+  "workOrderId": int,
+  "workOrderNo": string,
+  "styleName": string,
+  "buyer": string,
+  "factory": string,
+  "line": string,
+  "transactionType": "Receive" | "Delivery",
+  "transactionTypeName": string,
+  "processStageId": int, // ⭐
+  "processStageName": string, // ⭐ e.g., "Unwash"
+  "quantity": int,
+  "transactionDate": DateTime,
+  "batchNo": string?,
+  "gatePassNo": string?,
+  "remarks": string?,
+  "receivedBy": string?,
+  "deliveredTo": string?,
+  "createdByUsername": string,
+  "createdAt": DateTime,
+  "updatedByUsername": string?,
+  "updatedAt": DateTime?
+}
+```
+
+### ProcessBalanceDto
+```csharp
+{
+  "workOrderId": int,
+  "workOrderNo": string,
+  "styleName": string,
+  "processStageId": int, // ⭐
+  "processStageName": string, // ⭐
+  "totalReceived": int,
+  "totalDelivered": int,
+  "currentBalance": int,
+  "lastReceiveDate": DateTime?,
+  "lastDeliveryDate": DateTime?
+}
+```
+
+### WorkOrderWashStatusDto ⭐
+```csharp
+{
+  "workOrderId": int,
+  "workOrderNo": string,
+  "styleName": string,
+  "buyer": string,
+  "factory": string,
+  "line": string,
+  "washType": string,
+  "orderQuantity": int,
+  "stageBalances": { // ⭐ Dictionary<string, ProcessBalanceDto>
+    "1st Dry": {...},
+    "Unwash": {...},
+    "2nd Dry": {...},
+    "1st Wash": {...},
+    "Final Wash": {...},
+    // Dynamically includes ALL stages from database
+  },
+  "totalReceived": int,
+  "totalDelivered": int,
+  "overallBalance": int,
+  "completionPercentage": decimal
+}
+
+Key Feature: stageBalances is a Dictionary
+  - Keys: ProcessStage.Name (string)
+  - Values: ProcessBalanceDto
+  - Automatically includes all active stages
+  - Frontend can iterate dynamically
+```
+
+---
+
+## 🔄 Migration from Enum to Dynamic Table
+
+### Before (Enum-based)
+```csharp
+// Hard-coded enum
+public enum ProcessStage
+{
+    FirstDry = 1,
+    SecondDry = 2,
+    FirstWash = 3,
+    FinalWash = 4
+}
+
+// Model used enum
+public class WashTransaction
+{
+    public ProcessStage ProcessStage { get; set; } // Enum
+}
+
+Problems:
+  - Adding "Unwash" requires code changes
+  - Deployment needed
+  - Downtime required
+```
+
+### After (Table-based)
+```csharp
+// Dynamic model
+public class ProcessStage
+{
+    public int Id { get; set; }
+    public string Name { get; set; } // "1st Dry", "Unwash", etc.
+    public int DisplayOrder { get; set; }
+    public bool IsActive { get; set; }
+}
+
+// Model uses foreign key
+public class WashTransaction
+{
+    public int ProcessStageId { get; set; } // Foreign key
+    public ProcessStage ProcessStage { get; set; } // Navigation property
+}
+
+Benefits:
+  - Add new stages via API
+  - No code changes needed
+  - Zero downtime
+  - Fully flexible
+```
+
+### Migration Process
+```
+1. Create ProcessStages table
+2. Insert initial 5 stages (1st Dry, Unwash, 2nd Dry, 1st Wash, Final Wash)
+3. Add ProcessStageId column to WashTransactions (nullable first)
+4. Migrate existing data:
+   UPDATE WashTransactions 
+   SET ProcessStageId = CASE ProcessStage
+     WHEN 'FirstDry' THEN 1
+     WHEN 'Unwash' THEN 2
+     WHEN 'SecondDry' THEN 3
+     WHEN 'FirstWash' THEN 4
+     WHEN 'FinalWash' THEN 5
+   END
+5. Make ProcessStageId NOT NULL
+6. Drop old ProcessStage enum column
+7. Add foreign key constraint
+8. Repeat for ProcessStageBalances table
+9. Update Categories to match ProcessStages
+```
+
+---
+
+## 🚀 API Endpoints Reference
+
+### Authentication Endpoints
+
+#### POST /api/Auth/register
+```
+Authorization: None (public)
+Request Body:
+{
+  "fullName": "John Doe",
+  "username": "johndoe",
+  "email": "john@example.com",
+  "password": "SecurePass@123",
+  "roleIds": [2], // 1=Admin, 2=User
+  "categoryIds": [1, 2, 3] // Only for User role
+}
+
+Response (201 Created):
+{
+  "success": true,
+  "message": "User registered successfully"
+}
+
+Business Rules:
+  - Username must be unique
+  - Email must be unique
+  - Password minimum 6 characters
+  - If roleIds contains 1 (Admin):
+    * Ignores categoryIds
+    * Automatically assigns ALL categories with full permissions
+  - If roleIds contains 2 (User):
+    * Requires categoryIds
+    * Assigns specified categories with view-only permission
+```
+
+#### POST /api/Auth/login
+```
+Authorization: None (public)
+Request Body:
+{
+  "username": "admin", // or email
+  "password": "Admin@123"
+}
+
+Response (200 OK):
+{
+  "success": true,
+  "message": "Login successful",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "fullName": "System Administrator",
+    "username": "admin",
+    "email": "admin@example.com",
+    "roles": ["Admin"],
+    "categoryAccesses": [
+      {
+        "categoryId": 1,
+        "categoryName": "1st Dry",
+        "canView": true,
+        "canEdit": true,
+        "canDelete": true
+      },
+      ... (all categories for Admin)
+    ]
+  }
+}
+
+Token Usage: Add to headers
+  Authorization: Bearer {token}
+```
+
+#### GET /api/Auth/profile
+```
+Authorization: Bearer token required
+Response (200 OK):
+{
+  "userId": "1",
+  "username": "admin",
+  "roles": ["Admin"],
+  "isAdmin": true,
+  "categories": ["1st Dry", "Unwash", "2nd Dry", "1st Wash", "Final Wash"],
+  "message": "Admin has access to all categories"
+}
+```
+
+---
+
+### Process Stage Endpoints ⭐
+
+#### GET /api/ProcessStage
+```
+Authorization: Bearer token required
+Response (200 OK):
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "1st Dry",
+      "description": "First Dry Process",
+      "displayOrder": 1,
+      "isActive": true,
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": null
+    },
+    ... (all active stages)
+  ]
+}
+```
+
+#### GET /api/ProcessStage/{id}
+```
+Authorization: Bearer token required
+Path Parameter: id (int)
+Response (200 OK):
+{
+  "success": true,
+  "data": {
+    "id": 2,
+    "name": "Unwash",
+    "description": "Unwash Process",
+    "displayOrder": 2,
+    "isActive": true
+  }
+}
+```
+
+#### POST /api/ProcessStage
+```
+Authorization: Admin only
+Request Body:
+{
+  "name": "Quality Check",
+  "description": "Quality inspection stage",
+  "displayOrder": 7,
+  "isActive": true
+}
+
+Response (201 Created):
+{
+  "success": true,
+  "message": "Process stage created",
+  "data": {
+    ```markdown
+    "id": 7,
+    "name": "Quality Check",
+    "displayOrder": 7
+  }
+}
+```
+
+#### PUT /api/ProcessStage/{id}
+```
+Authorization: Admin only
+Request: Same as POST
+Response: Updated stage data
+```
+
+#### DELETE /api/ProcessStage/{id}
+```
+Authorization: Admin only
+Response: {"success": true, "message": "Process stage deactivated"}
+Note: Soft delete (IsActive = false)
+```
+
+---
+
+### Work Order Endpoints
+
+#### GET /api/WorkOrder
+```
+Authorization: Required
+Response: Array of all work orders with details
+```
+
+#### GET /api/WorkOrder/{id}
+```
+Authorization: Required
+Response: Single work order by ID
+```
+
+#### GET /api/WorkOrder/by-workorderno/{workOrderNo}
+```
+Authorization: Required
+Response: Work order by unique WorkOrderNo
+```
+
+#### POST /api/WorkOrder
+```
+Authorization: Admin only
+Request:
+{
+  "factory": "TAL",
+  "line": "Line A",
+  "unit": "Unit 1",
+  "buyer": "Zara",
+  "styleName": "FOLDED WAISTBAND",
+  "workOrderNo": "WO-001",
+  "washType": "Acid Wash",
+  "orderQuantity": 5000,
+  "cutQty": 5100
+}
+Response: Created work order with ID
+```
+
+#### PUT /api/WorkOrder/{id}
+```
+Authorization: Admin only
+Request: Same as POST
+Response: Updated work order
+```
+
+#### DELETE /api/WorkOrder/{id}
+```
+Authorization: Admin only
+Response: {"success": true}
+Note: Hard delete (cascades to transactions and balances)
+```
+
+#### POST /api/WorkOrder/bulk-upload
+```
+Authorization: Admin only
+Request: multipart/form-data with Excel file
+Response:
+{
+  "success": true,
+  "totalRecords": 50,
+  "successCount": 45,
+  "updatedCount": 3,
+  "failedCount": 2,
+  "errors": ["Row 10: Invalid date format", ...]
+}
+```
+
+#### GET /api/WorkOrder/download-template
+```
+Authorization: Admin only
+Response: Excel template file download
+```
+
+---
+
+### Transaction Endpoints ⭐
+
+#### POST /api/WashTransaction/receive
+```
+Authorization: Required
+Request:
+{
+  "workOrderId": 1,
+  "processStageId": 2, // Unwash
+  "quantity": 1000,
+  "batchNo": "BATCH-001",
+  "remarks": "Received at Unwash"
+}
+Response: Created transaction with balance update
+```
+
+#### POST /api/WashTransaction/delivery
+```
+Authorization: Required
+Request: Same as receive
+Validation: Checks sufficient balance
+Response: Created transaction or 400 error if insufficient balance
+```
+
+#### GET /api/WashTransaction
+```
+Authorization: Required
+Response: All active transactions (ordered by date DESC)
+```
+
+#### GET /api/WashTransaction/{id}
+```
+Authorization: Required
+Response: Single transaction with full details
+```
+
+#### GET /api/WashTransaction/workorder/{workOrderId}
+```
+Authorization: Required
+Response: All transactions for specific work order
+```
+
+#### GET /api/WashTransaction/stage/{processStageId}
+```
+Authorization: Required
+Response: All transactions for specific stage
+Note: Works with ANY stage ID (including newly added)
+```
+
+#### POST /api/WashTransaction/filter
+```
+Authorization: Required
+Request:
+{
+  "workOrderId": 1,
+  "transactionType": 1,
+  "processStageId": 2,
+  "startDate": "2025-11-01",
+  "endDate": "2025-11-30",
+  "batchNo": "BATCH-001"
+}
+Response: Filtered transactions (all filters optional)
+```
+
+#### PUT /api/WashTransaction/{id}
+```
+Authorization: Admin only
+Request: Same as create
+Response: Updated transaction with recalculated balances
+```
+
+#### DELETE /api/WashTransaction/{id}
+```
+Authorization: Admin only
+Response: {"success": true}
+Note: Soft delete, updates balances
+```
+
+---
+
+### Balance & Status Endpoints ⭐
+
+#### GET /api/WashTransaction/balance/workorder/{workOrderId}
+```
+Authorization: Required
+Response: Array of ProcessBalanceDto for all stages
+```
+
+#### GET /api/WashTransaction/status/workorder/{workOrderId}
+```
+Authorization: Required
+Response: WorkOrderWashStatusDto with complete stage-wise breakdown
+Key Feature: Includes ALL stages dynamically
+```
+
+#### GET /api/WashTransaction/status/all
+```
+Authorization: Required
+Response: Wash status for ALL work orders
+```
+
+#### GET /api/WashTransaction/summary/stages
+```
+Authorization: Required
+Response: Summary report across all stages
+[
+  {
+    "processStageId": 1,
+    "processStageName": "1st Dry",
+    "totalReceiveCount": 150,
+    "totalReceivedQty": 50000,
+    "currentBalance": 5000
+  },
+  ... (all stages)
+]
+```
+
+#### GET /api/WashTransaction/receives/stage/{processStageId}
+```
+Authorization: Required
+Query Params: ?startDate=...&endDate=...
+Response: All receive transactions for specific stage
+```
+
+#### GET /api/WashTransaction/deliveries/stage/{processStageId}
+```
+Authorization: Required
+Query Params: ?startDate=...&endDate=...
+Response: All delivery transactions for specific stage
+```
+
+---
+
+## 🎯 Key Business Rules Summary
+
+1. **Authentication**: JWT required for all endpoints except register/login
+2. **Authorization**: Admin role required for create/update/delete operations
+3. **Work Orders**: Unique WorkOrderNo enforced at database level
+4. **Transactions**: 
+   - Receive: Always succeeds, adds to balance
+   - Delivery: Validates sufficient balance first
+5. **Balances**: Auto-calculated after every transaction
+6. **Soft Delete**: Transactions use IsActive flag
+7. **Hard Delete**: Work orders cascade delete to transactions/balances
+8. **Dynamic Stages**: New stages immediately available across entire system
+9. **Audit Trail**: CreatedBy/UpdatedBy tracked with timestamps
+10. **Category Access**: Admin gets all, Users get assigned only
+
+---
+
+## 📊 Database Relationships
+
+```
+Users ←1:N→ UserRoles →N:1→ Roles
+Users ←1:N→ UserCategoryAccesses →N:1→ Categories
+Users ←1:N→ WorkOrders (CreatedBy/UpdatedBy)
+WorkOrders ←1:N→ WashTransactions
+ProcessStages ←1:N→ WashTransactions
+Users ←1:N→ WashTransactions (CreatedBy/UpdatedBy)
+WorkOrders + ProcessStages ←1:1→ ProcessStageBalances (composite unique)
+```
+
+---
+
+## 🔧 Configuration Files
+
+### appsettings.json
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=...;Database=wsahRecieveDelivary;..."
+  },
+  "JwtSettings": {
+    "SecretKey": "32+ character secret key",
+    "Issuer": "wsahRecieveDelivary",
+    "Audience": "wsahRecieveDelivaryUsers"
+  }
+}
+```
+
+### Program.cs Key Configurations
+```
+- CORS: AllowAll policy
+- Authentication: JWT Bearer
+- Authorization: Role-based
+- Swagger: Bearer token support
+- EPPlus: NonCommercial license
+- Services: Scoped lifetime for DbContext and services
+- Middleware Order: HTTPS → CORS → Authentication → Authorization
+```
+
+---
+
+## 🧪 Testing Scenarios
+
+### Scenario 1: Complete Wash Flow
+```
+1. Create Work Order (5000 pcs)
+2. Receive at 1st Dry (1000 pcs) → Balance: 1000
+3. Deliver from 1st Dry (800 pcs) → Balance: 200
+4. Receive at Unwash (800 pcs) → Balance: 800
+5. Deliver from Unwash (700 pcs) → Balance: 100
+6. Continue through 2nd Dry → 1st Wash → Final Wash
+7. Check status: Shows complete stage-wise breakdown
+```
+
+### Scenario 2: Balance Validation
+```
+1. Receive at 1st Dry (500 pcs)
+2. Try to deliver 1000 pcs → Error: Insufficient balance
+3. Deliver 500 pcs → Success
+4. Try to deliver 1 more → Error: Zero balance
+```
+
+### Scenario 3: Dynamic Stage Addition
+```
+1. GET /api/ProcessStage → Shows 5 stages
+2. POST /api/ProcessStage (Add "Pre-Wash")
+3. GET /api/ProcessStage → Shows 6 stages
+4. Create transaction with processStageId: 6 → Works immediately
+5. GET status → Includes "Pre-Wash" in breakdown
+6. NO CODE CHANGES NEEDED!
+```
+
+### Scenario 4: Soft Delete Impact
+```
+1. Create receive transaction (1000 pcs) → Balance: 1000
+2. Soft delete transaction → Balance recalculated to: 0
+3. Transaction still in database (IsActive = false)
+4. Audit trail preserved
+```
+
+---
+
+## 💡 System Advantages
+
+### 1. **Flexibility**
+- Add/remove/rename stages without code changes
+- Adapt to new business processes instantly
+- No deployment downtime
+
+### 2. **Data Integrity**
+- Foreign key constraints enforce referential integrity
+- Soft delete preserves audit trail
+- Balance validation prevents errors
+- Unique constraints prevent duplicates
+
+### 3. **Scalability**
+- Entity Framework handles query optimization
+- Indexes on critical columns
+- Efficient joins with navigation properties
+- Pagination-ready design
+
+### 4. **Security**
+- JWT authentication
+- Role-based authorization
+- BCrypt password hashing
+- Claim-based access control
+
+### 5. **Maintainability**
+- Clean architecture with service layer
+- DTO pattern separates concerns
+- Dependency injection for testability
+- Comprehensive error handling
+
+### 6. **Auditability**
+- CreatedBy/UpdatedBy tracking
+- Timestamp tracking (CreatedAt/UpdatedAt)
+- Soft delete preserves history
+- Transaction log via WashTransactions
+
+---
+
+## 🚨 Common Error Scenarios
+
+### Error 1: Insufficient Balance
+```
+Request: Delivery of 1000 pcs when balance is 500
+Response: 400 Bad Request
+{
+  "success": false,
+  "message": "Insufficient balance in 1st Dry. Available: 500, Requested: 1000"
+}
+```
+
+### Error 2: Work Order Not Found
+```
+Request: Create transaction with workOrderId: 999 (doesn't exist)
+Response: 404 Not Found
+{
+  "success": false,
+  "message": "WorkOrder with ID 999 not found"
+}
+```
+
+### Error 3: Invalid Process Stage
+```
+Request: Create transaction with processStageId: 99 (doesn't exist)
+Response: 404 Not Found
+{
+  "success": false,
+  "message": "ProcessStage with ID 99 not found"
+}
+```
+
+### Error 4: Duplicate Work Order
+```
+Request: Create work order with existing WorkOrderNo
+Response: 400 Bad Request
+{
+  "success": false,
+  "message": "Work Order No 'WO-001' already exists"
+}
+```
+
+### Error 5: Unauthorized Access
+```
+Request: User role tries to create work order
+Response: 403 Forbidden
+{
+  "title": "Forbidden",
+  "status": 403
+}
+```
+
+---
+
+## 📚 Training Summary
+
+This system demonstrates:
+1. **Modern API Design**: RESTful, JWT, Swagger
+2. **Database Normalization**: Proper relationships and constraints
+3. **Dynamic Configuration**: Table-driven instead of enum-driven
+4. **Business Logic**: Balance tracking, validation, audit trail
+5. **Security**: Authentication, authorization, role-based access
+6. **Scalability**: Clean architecture, service layer, DI
+7. **Maintainability**: DTOs, separation of concerns, error handling
+
+**Core Innovation**: Dynamic ProcessStage management allows business users to configure the system without technical intervention - a production-ready, enterprise-grade solution.
+
+---
+
+END OF TRAINING DOCUMENT
+```
+
+This compact document covers all essential aspects of the system for training another LLM. Save it as `SYSTEM_TRAINING_GUIDE.md`.
+I've actually completed the entire training document! The document ended with "END OF TRAINING DOCUMENT" marker.
+
+However, let me create **additional supplementary sections** that might be useful:
+
+---
+
+```markdown
+## 📦 SUPPLEMENTARY SECTIONS
+
+---
+
+## 🛠️ Development Setup Guide
+
+### Prerequisites
+```
+- .NET 8.0 SDK
+- SQL Server 2019 or later
+- Visual Studio 2022 / VS Code
+- Git
+```
+
+### Installation Steps
+```bash
+# 1. Clone repository
+git clone <repository-url>
+cd wsahRecieveDelivary
+
+# 2. Restore packages
+dotnet restore
+
+# 3. Update connection string in appsettings.json
+"ConnectionStrings": {
+  "DefaultConnection": "Server=YOUR_SERVER;Database=wsahRecieveDelivary;..."
+}
+
+# 4. Apply migrations
+dotnet ef database update
+
+# 5. Run application
+dotnet run
+
+# 6. Access Swagger
+https://localhost:7203/swagger
+```
+
+---
+
+## 🔍 Code Structure
+
+### Project Organization
+```
+wsahRecieveDelivary/
+├── Controllers/           # API endpoints
+│   ├── AuthController.cs
+│   ├── ProcessStageController.cs
+│   ├── WorkOrderController.cs
+│   └── WashTransactionController.cs
+├── Data/
+│   └── ApplicationDbContext.cs
+├── DTOs/                 # Data Transfer Objects
+│   ├── AuthDtos.cs
+│   ├── WashTransactionDto.cs
+│   └── WorkOrderDto.cs
+├── Models/               # Entity models
+│   ├── User.cs
+│   ├── ProcessStage.cs
+│   ├── WorkOrder.cs
+│   ├── WashTransaction.cs
+│   └── ProcessStageBalance.cs
+├── Models/Enums/
+│   └── TransactionType.cs
+├── Services/             # Business logic
+│   ├── IAuthService.cs / AuthService.cs
+│   ├── IJwtService.cs / JwtService.cs
+│   ├── IWorkOrderService.cs / WorkOrderService.cs
+│   └── IWashTransactionService.cs / WashTransactionService.cs
+├── Migrations/           # EF Core migrations
+├── Filters/
+│   └── FileUploadOperationFilter.cs
+├── Properties/
+│   └── launchSettings.json
+├── appsettings.json
+└── Program.cs
+```
+
+---
+
+## 🗃️ Sample Data Scripts
+
+### Insert Test Users
+```sql
+-- Admin User (Password: Admin@123)
+INSERT INTO Users (FullName, Username, Email, PasswordHash, IsActive, CreatedAt)
+VALUES ('Admin User', 'admin', 'admin@test.com', 
+'$2a$11$vK8QXxJxGxH5Y5rZJ4Zt4.XEj5fJ3Y.YhZt2xPwHxVzJxH5Y5rZJ4', 1, GETUTCDATE());
+
+DECLARE @adminId INT = SCOPE_IDENTITY();
+
+-- Assign Admin Role
+INSERT INTO UserRoles (UserId, RoleId, AssignedAt)
+VALUES (@adminId, 1, GETUTCDATE());
+
+-- Regular User (Password: User@123)
+INSERT INTO Users (FullName, Username, Email, PasswordHash, IsActive, CreatedAt)
+VALUES ('Regular User', 'user', 'user@test.com', 
+'$2a$11$anotherHashedPasswordHere', 1, GETUTCDATE());
+
+DECLARE @userId INT = SCOPE_IDENTITY();
+
+-- Assign User Role
+INSERT INTO UserRoles (UserId, RoleId, AssignedAt)
+VALUES (@userId, 2, GETUTCDATE());
+
+-- Assign specific categories to user
+INSERT INTO UserCategoryAccesses (UserId, CategoryId, CanView, CanEdit, CanDelete, AssignedAt)
+VALUES 
+(@userId, 1, 1, 0, 0, GETUTCDATE()), -- 1st Dry - View only
+(@userId, 2, 1, 1, 0, GETUTCDATE()); -- Unwash - View + Edit
+```
+
+### Sample Complete Flow
+```sql
+-- Work Order
+INSERT INTO WorkOrders (Factory, Line, Unit, Buyer, StyleName, WorkOrderNo, 
+                        OrderQuantity, CreatedBy, CreatedAt)
+VALUES ('TAL', 'Line A', 'Unit 1', 'Zara', 'Denim Jacket', 'WO-SAMPLE-001', 
+        10000, 1, GETUTCDATE());
+
+DECLARE @woId INT = SCOPE_IDENTITY();
+
+-- Transaction Flow
+-- 1st Dry Receive
+INSERT INTO WashTransactions (WorkOrderId, TransactionType, ProcessStageId, Quantity, 
+                              TransactionDate, BatchNo, CreatedBy, CreatedAt, IsActive)
+VALUES (@woId, 'Receive', 1, 2500, GETUTCDATE(), 'BATCH-001', 1, GETUTCDATE(), 1);
+
+-- 1st Dry Deliver to Unwash
+INSERT INTO WashTransactions (WorkOrderId, TransactionType, ProcessStageId, Quantity, 
+                              TransactionDate, BatchNo, GatePassNo, CreatedBy, CreatedAt, IsActive)
+VALUES (@woId, 'Delivery', 1, 2000, GETUTCDATE(), 'BATCH-001', 'GP-001', 1, GETUTCDATE(), 1);
+
+-- Unwash Receive
+INSERT INTO WashTransactions (WorkOrderId, TransactionType, ProcessStageId, Quantity, 
+                              TransactionDate, BatchNo, CreatedBy, CreatedAt, IsActive)
+VALUES (@woId, 'Receive', 2, 2000, GETUTCDATE(), 'BATCH-001', 1, GETUTCDATE(), 1);
+
+-- Unwash Deliver to 2nd Dry
+INSERT INTO WashTransactions (WorkOrderId, TransactionType, ProcessStageId, Quantity, 
+                              TransactionDate, BatchNo, GatePassNo, CreatedBy, CreatedAt, IsActive)
+VALUES (@woId, 'Delivery', 2, 1800, GETUTCDATE(), 'BATCH-001', 'GP-002', 1, GETUTCDATE(), 1);
+
+-- Continue for remaining stages...
+```
+
+---
+
+## 📊 Useful Database Queries
+
+### Work Order Status Summary
+```sql
+SELECT 
+    wo.WorkOrderNo,
+    wo.Buyer,
+    wo.StyleName,
+    wo.OrderQuantity,
+    ISNULL(SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END), 0) AS TotalReceived,
+    ISNULL(SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END), 0) AS TotalDelivered,
+    wo.OrderQuantity - ISNULL(SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END), 0) AS Remaining,
+    CAST((ISNULL(SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END), 0) * 100.0 / 
+          NULLIF(wo.OrderQuantity, 0)) AS DECIMAL(5,2)) AS CompletionPercent
+FROM WorkOrders wo
+LEFT JOIN WashTransactions wt ON wo.Id = wt.WorkOrderId AND wt.IsActive = 1
+GROUP BY wo.Id, wo.WorkOrderNo, wo.Buyer, wo.StyleName, wo.OrderQuantity
+ORDER BY wo.WorkOrderNo;
+```
+
+### Stage-wise Pending Balance
+```sql
+SELECT 
+    ps.Name AS Stage,
+    COUNT(DISTINCT psb.WorkOrderId) AS ActiveWorkOrders,
+    SUM(psb.CurrentBalance) AS TotalPendingQuantity
+FROM ProcessStages ps
+LEFT JOIN ProcessStageBalances psb ON ps.Id = psb.ProcessStageId
+WHERE ps.IsActive = 1 AND (psb.CurrentBalance > 0 OR psb.CurrentBalance IS NULL)
+GROUP BY ps.Id, ps.Name, ps.DisplayOrder
+ORDER BY ps.DisplayOrder;
+```
+
+### Daily Transaction Summary
+```sql
+SELECT 
+    CAST(wt.TransactionDate AS DATE) AS TransactionDate,
+    ps.Name AS Stage,
+    wt.TransactionType,
+    COUNT(*) AS TransactionCount,
+    SUM(wt.Quantity) AS TotalQuantity
+FROM WashTransactions wt
+JOIN ProcessStages ps ON wt.ProcessStageId = ps.Id
+WHERE wt.IsActive = 1
+  AND wt.TransactionDate >= DATEADD(DAY, -30, GETDATE())
+GROUP BY CAST(wt.TransactionDate AS DATE), ps.Name, wt.TransactionType
+ORDER BY TransactionDate DESC, ps.Name, wt.TransactionType;
+```
+
+### Work Order Flow Timeline
+```sql
+SELECT 
+    wo.WorkOrderNo,
+    ps.Name AS Stage,
+    wt.TransactionType,
+    wt.Quantity,
+    wt.TransactionDate,
+    wt.BatchNo,
+    wt.GatePassNo,
+    u.Username AS ProcessedBy
+FROM WashTransactions wt
+JOIN WorkOrders wo ON wt.WorkOrderId = wo.Id
+JOIN ProcessStages ps ON wt.ProcessStageId = ps.Id
+JOIN Users u ON wt.CreatedBy = u.Id
+WHERE wo.WorkOrderNo = 'WO-001'
+  AND wt.IsActive = 1
+ORDER BY wt.TransactionDate, ps.DisplayOrder;
+```
+
+### Stage Efficiency Analysis
+```sql
+SELECT 
+    ps.Name AS Stage,
+    COUNT(DISTINCT wt.WorkOrderId) AS WorkOrdersProcessed,
+    SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END) AS TotalReceived,
+    SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END) AS TotalDelivered,
+    SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END) - 
+    SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END) AS CurrentPending,
+    CAST((SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END) * 100.0 / 
+          NULLIF(SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END), 0)) 
+         AS DECIMAL(5,2)) AS DeliveryPercentage,
+    AVG(DATEDIFF(HOUR, 
+        (SELECT MIN(wt2.TransactionDate) FROM WashTransactions wt2 
+         WHERE wt2.WorkOrderId = wt.WorkOrderId AND wt2.ProcessStageId = wt.ProcessStageId 
+         AND wt2.TransactionType = 'Receive' AND wt2.IsActive = 1),
+        (SELECT MIN(wt3.TransactionDate) FROM WashTransactions wt3 
+         WHERE wt3.WorkOrderId = wt.WorkOrderId AND wt3.ProcessStageId = wt.ProcessStageId 
+         AND wt3.TransactionType = 'Delivery' AND wt3.IsActive = 1)
+    )) AS AvgProcessingTimeHours
+FROM WashTransactions wt
+JOIN ProcessStages ps ON wt.ProcessStageId = ps.Id
+WHERE wt.IsActive = 1
+GROUP BY ps.Id, ps.Name, ps.DisplayOrder
+ORDER BY ps.DisplayOrder;
+```
+
+---
+
+## 🧪 Postman Collection Highlights
+
+### Environment Variables
+```json
+{
+  "base_url": "https://localhost:7203",
+  "token": "{{auth_token}}",
+  "workOrderId": "1",
+  "processStageId": "2"
+}
+```
+
+### Collection Structure
+```
+1. Auth
+   ├── POST Register Admin
+   ├── POST Register User
+   ├── POST Login
+   └── GET Profile
+
+2. Process Stages
+   ├── GET All Stages
+   ├── GET Stage by ID
+   ├── POST Create Stage
+   ├── PUT Update Stage
+   └── DELETE Deactivate Stage
+
+3. Work Orders
+   ├── GET All Work Orders
+   ├── GET Work Order by ID
+   ├── POST Create Work Order
+   ├── POST Bulk Upload
+   └── GET Download Template
+
+4. Transactions
+   ├── POST Create Receive
+   ├── POST Create Delivery
+   ├── GET All Transactions
+   ├── POST Filter Transactions
+   └── DELETE Soft Delete
+
+5. Reports
+   ├── GET Wash Status by Work Order
+   ├── GET All Wash Statuses
+   ├── GET Stage Summary
+   ├── GET Balance by Work Order
+   └── GET Transactions by Stage
+```
+
+---
+
+## 🔐 Security Best Practices
+
+### Password Requirements
+```
+- Minimum 6 characters
+- Recommended: 
+  * At least 1 uppercase
+  * At least 1 lowercase
+  * At least 1 number
+  * At least 1 special character
+- Hashed using BCrypt with cost factor 11
+```
+
+### Token Management
+```
+- Store token in secure storage (not localStorage for production)
+- Include in Authorization header: "Bearer {token}"
+- Token expires after 24 hours
+- Refresh token mechanism recommended for production
+```
+
+### API Security Checklist
+```
+✓ HTTPS enforced (app.UseHttpsRedirection)
+✓ CORS configured (restricted in production)
+✓ JWT authentication
+✓ Role-based authorization
+✓ Input validation via [Required], [Range], etc.
+✓ SQL injection protected (EF Core parameterized queries)
+✓ Soft delete for audit trail
+✓ CreatedBy/UpdatedBy tracking
+```
+
+---
+
+## 🚀 Performance Optimization Tips
+
+### Database Indexes
+```sql
+-- Already implemented:
+- Primary keys (clustered indexes)
+- Unique constraints (Username, Email, WorkOrderNo)
+- Foreign key indexes (auto-created)
+- Composite indexes on frequently queried columns
+
+-- Additional recommendations:
+CREATE INDEX IX_WashTransactions_TransactionDate_ProcessStageId 
+ON WashTransactions(TransactionDate, ProcessStageId) 
+INCLUDE (Quantity, WorkOrderId);
+
+CREATE INDEX IX_WorkOrders_Buyer_Factory 
+ON WorkOrders(Buyer, Factory) 
+INCLUDE (WorkOrderNo, OrderQuantity);
+```
+
+### Query Optimization
+```csharp
+// Use .AsNoTracking() for read-only queries
+var transactions = await _context.WashTransactions
+    .AsNoTracking()
+    .Where(t => t.IsActive)
+    .ToListAsync();
+
+// Use Select to project only needed fields
+var summary = await _context.WorkOrders
+    .Select(w => new { w.Id, w.WorkOrderNo, w.Buyer })
+    .ToListAsync();
+
+// Use Include for navigation properties
+var transactions = await _context.WashTransactions
+    .Include(t => t.WorkOrder)
+    .Include(t => t.ProcessStage)
+    .ToListAsync();
+```
+
+### Caching Strategy (Future Enhancement)
+```csharp
+// Process Stages rarely change - cache for 1 hour
+// Categories rarely change - cache for 1 hour
+// Transaction data - no caching (real-time)
+// Balance data - computed on-demand
+
+// Example with IMemoryCache:
+public async Task<List<ProcessStage>> GetProcessStagesAsync()
+{
+    return await _cache.GetOrCreateAsync("ProcessStages", async entry =>
+    {
+        entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
+        return await _context.ProcessStages
+            .Where(ps => ps.IsActive)
+            .OrderBy(ps => ps.DisplayOrder)
+            .ToListAsync();
+    });
+}
+```
+
+---
+
+## 📈 Monitoring & Logging
+
+### Recommended Logging Points
+```csharp
+// 1. Transaction creation
+_logger.LogInformation("Creating {TransactionType} transaction for WorkOrder {WorkOrderNo}, Stage {StageName}, Quantity {Quantity}",
+    transactionType, workOrderNo, stageName, quantity);
+
+// 2. Balance updates
+_logger.LogInformation("Updated balance for WorkOrder {WorkOrderId}, Stage {StageId}: Received={Received}, Delivered={Delivered}, Balance={Balance}",
+    workOrderId, stageId, totalReceived, totalDelivered, currentBalance);
+
+// 3. Validation failures
+_logger.LogWarning("Insufficient balance for delivery: WorkOrder {WorkOrderId}, Stage {StageId}, Available={Available}, Requested={Requested}",
+    workOrderId, stageId, available, requested);
+
+// 4. Authentication events
+```markdown
+// 4. Authentication events
+_logger.LogInformation("User {Username} logged in successfully", username);
+_logger.LogWarning("Failed login attempt for username {Username}", username);
+
+// 5. Authorization failures
+_logger.LogWarning("Unauthorized access attempt by user {UserId} to endpoint {Endpoint}", 
+    userId, endpoint);
+
+// 6. Process stage management
+_logger.LogInformation("New process stage created: {StageName} with ID {StageId}", 
+    stageName, stageId);
+
+// 7. Errors
+_logger.LogError(ex, "Error processing work order bulk upload: {Message}", ex.Message);
+```
+
+### Health Check Endpoint (Recommended Addition)
+```csharp
+// In Program.cs
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<ApplicationDbContext>();
+
+app.MapHealthChecks("/health");
+
+// Response: {"status": "Healthy"}
+```
+
+---
+
+## 🧩 Extension Points & Future Enhancements
+
+### 1. Notification System
+```csharp
+// Interface
+public interface INotificationService
+{
+    Task NotifyLowBalanceAsync(int workOrderId, int stageId, int balance);
+    Task NotifyCompletionAsync(int workOrderId);
+    Task NotifyDeliveryDelayAsync(int workOrderId, DateTime expectedDate);
+}
+
+// Implementation options:
+// - Email via SMTP
+// - SMS via Twilio
+// - Push notifications
+// - In-app notifications
+```
+
+### 2. Reporting Module
+```csharp
+public interface IReportService
+{
+    Task<byte[]> GenerateDailyReportPdfAsync(DateTime date);
+    Task<byte[]> GenerateWorkOrderSummaryExcelAsync(int workOrderId);
+    Task<byte[]> GenerateStageEfficiencyReportAsync(DateTime startDate, DateTime endDate);
+}
+
+// Use libraries:
+// - iTextSharp / QuestPDF for PDF
+// - EPPlus for Excel
+// - Chart.js / Plotly for visualizations
+```
+
+### 3. Dashboard Analytics
+```csharp
+public class DashboardDto
+{
+    public int TotalActiveWorkOrders { get; set; }
+    public int TotalPendingQuantity { get; set; }
+    public Dictionary<string, int> StageWisePending { get; set; }
+    public List<WorkOrderDto> CriticalWorkOrders { get; set; } // Near deadline
+    public DailyTrendDto Last30DaysTrend { get; set; }
+}
+
+// Endpoint: GET /api/Dashboard
+```
+
+### 4. Barcode/QR Code Integration
+```csharp
+public interface IBarcodeService
+{
+    string GenerateBarcodeForBatch(string batchNo);
+    string GenerateQRCodeForWorkOrder(string workOrderNo);
+    Task<TransactionDto> ScanAndProcessAsync(string barcodeData);
+}
+
+// Use libraries: ZXing.Net, QRCoder
+```
+
+### 5. Approval Workflow
+```csharp
+public class TransactionApproval
+{
+    public int Id { get; set; }
+    public int TransactionId { get; set; }
+    public int RequestedBy { get; set; }
+    public int? ApprovedBy { get; set; }
+    public string Status { get; set; } // Pending, Approved, Rejected
+    public DateTime RequestedAt { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+}
+
+// For high-value transactions or deliveries
+```
+
+### 6. Mobile App Support
+```csharp
+// Additional endpoints for mobile:
+[HttpGet("mobile/summary")]
+public async Task<IActionResult> GetMobileSummary()
+{
+    // Lightweight response optimized for mobile
+}
+
+[HttpPost("mobile/quick-scan")]
+public async Task<IActionResult> QuickScan([FromBody] ScanDto dto)
+{
+    // Fast barcode scanning + transaction creation
+}
+```
+
+### 7. Batch Operations
+```csharp
+[HttpPost("transactions/batch")]
+public async Task<IActionResult> CreateBatchTransactions(
+    [FromBody] List<CreateWashTransactionDto> transactions)
+{
+    // Create multiple transactions in single API call
+    // Useful for batch scanning
+}
+```
+
+### 8. Data Export
+```csharp
+[HttpGet("export/transactions")]
+public async Task<IActionResult> ExportTransactions(
+    [FromQuery] DateTime startDate, 
+    [FromQuery] DateTime endDate,
+    [FromQuery] string format = "excel") // excel, csv, pdf
+{
+    // Export filtered data
+}
+```
+
+### 9. Audit Log Viewer
+```csharp
+public class AuditLog
+{
+    public int Id { get; set; }
+    public string EntityName { get; set; } // WorkOrder, Transaction
+    public int EntityId { get; set; }
+    public string Action { get; set; } // Created, Updated, Deleted
+    public string OldValues { get; set; } // JSON
+    public string NewValues { get; set; } // JSON
+    public int UserId { get; set; }
+    public DateTime Timestamp { get; set; }
+}
+
+// Automatically log all changes via EF Core interceptor
+```
+
+### 10. Real-time Updates (SignalR)
+```csharp
+public class TransactionHub : Hub
+{
+    public async Task NotifyTransactionCreated(int workOrderId)
+    {
+        await Clients.All.SendAsync("TransactionCreated", workOrderId);
+    }
+}
+
+// Client subscribes to real-time balance updates
+// Useful for dashboard live monitoring
+```
+
+---
+
+## 🐛 Troubleshooting Guide
+
+### Issue 1: Migration Fails with Foreign Key Error
+```
+Error: "The ALTER TABLE statement conflicted with the FOREIGN KEY constraint"
+
+Solution:
+1. Check existing data has valid references
+2. Fix orphaned records:
+   DELETE FROM WashTransactions WHERE ProcessStageId NOT IN (SELECT Id FROM ProcessStages);
+3. Re-run migration
+```
+
+### Issue 2: Balance Calculation Incorrect
+```
+Problem: CurrentBalance shows wrong value
+
+Diagnosis:
+SELECT 
+    psb.WorkOrderId,
+    psb.ProcessStageId,
+    psb.TotalReceived,
+    psb.TotalDelivered,
+    psb.CurrentBalance,
+    -- Verify against actual transactions
+    ISNULL(SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END), 0) AS ActualReceived,
+    ISNULL(SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END), 0) AS ActualDelivered
+FROM ProcessStageBalances psb
+LEFT JOIN WashTransactions wt ON psb.WorkOrderId = wt.WorkOrderId 
+    AND psb.ProcessStageId = wt.ProcessStageId 
+    AND wt.IsActive = 1
+GROUP BY psb.WorkOrderId, psb.ProcessStageId, psb.TotalReceived, psb.TotalDelivered, psb.CurrentBalance
+HAVING psb.CurrentBalance != (ISNULL(SUM(CASE WHEN wt.TransactionType = 'Receive' THEN wt.Quantity ELSE 0 END), 0) - 
+                               ISNULL(SUM(CASE WHEN wt.TransactionType = 'Delivery' THEN wt.Quantity ELSE 0 END), 0));
+
+Fix:
+-- Recalculate all balances
+EXEC sp_MSforeachtable 'DELETE FROM ProcessStageBalances';
+-- Trigger recalculation by calling UpdateStageBalanceAsync for each work order + stage
+```
+
+### Issue 3: JWT Token Expired
+```
+Error: 401 Unauthorized
+
+Solution:
+1. Request new token via /api/Auth/login
+2. Update Authorization header
+3. Consider implementing refresh token mechanism
+```
+
+### Issue 4: Excel Upload Fails
+```
+Error: "Invalid file format"
+
+Checklist:
+✓ File extension is .xlsx or .xls
+✓ File is not corrupted
+✓ First row contains headers
+✓ WorkOrderNo column (column 9) is not empty
+✓ Date formats are valid
+✓ Numeric fields don't contain text
+
+Debug:
+- Download template via GET /api/WorkOrder/download-template
+- Compare your file structure with template
+```
+
+### Issue 5: Duplicate Process Stage Names
+```
+Error: "Cannot insert duplicate key"
+
+Solution:
+SELECT Name, COUNT(*) 
+FROM ProcessStages 
+GROUP BY Name 
+HAVING COUNT(*) > 1;
+
+-- Fix duplicates
+UPDATE ProcessStages SET Name = Name + '_OLD' WHERE Id = <duplicate_id>;
+```
+ 

@@ -1,0 +1,247 @@
+# **Project Context: Wash Track Backend (Detailed)**
+
+This document provides a comprehensive, in-depth overview of the Wash Track Backend system. It is intended to be a single source of truth for understanding the project's architecture, code structure, business logic, and data flow.
+
+## **1. Project Overview**
+
+The Wash Track Backend is a professional ASP.NET Core 8.0 Web API designed to manage and track garment wash transactions through a series of dynamic, configurable processing stages. It is a multi-user system with role-based access control, real-time balance tracking for each stage of a work order, and extensive reporting capabilities.
+
+**Key Features:**
+- Dynamic Process Stage Management
+- Real-time Balance Tracking
+- Role-Based Access Control (RBAC)
+- Comprehensive Audit Trails
+- Bulk Data Upload via Excel
+- Paginated and Searchable API Endpoints
+- CSV Data Export
+
+## **2. Technology Stack**
+
+- **Framework**: ASP.NET Core 8.0 Web API
+- **ORM**: Entity Framework Core 8.0
+- **Database**: SQL Server
+- **Authentication**: JWT Bearer Tokens
+- **Password Hashing**: BCrypt.Net-Next
+- **API Documentation**: Swagger (OpenAPI)
+- **File Processing**: 
+  - EPPlus for Excel (.xlsx)
+  - CsvHelper for CSV
+- **Language**: C# 12
+
+## **3. Detailed File Breakdown & Relationships**
+
+### **`/Program.cs`**
+- **Path**: `D:\test c#\wsahRecieveDelivary\Program.cs`
+- **Purpose**: The main entry point of the application. It is responsible for configuring and starting the web host.
+- **Key Configurations**:
+  - **CORS**: A permissive "AllowAll" policy is configured to allow requests from any origin, method, and header.
+  - **Database**: `ApplicationDbContext` is registered with the dependency injection container and configured to use SQL Server.
+  - **Authentication**: JWT Bearer authentication is configured. The token validation parameters (issuer, audience, signing key) are read from `appsettings.json`.
+  - **Authorization**: The authorization middleware is added to the pipeline.
+  - **Services**: All the application's services (`IAuthService`, `IJwtService`, `IWorkOrderService`, `IWashTransactionService`, `IUserService`) are registered with a scoped lifetime.
+  - **Swagger**: Swagger/OpenAPI is configured for API documentation, including support for JWT Bearer token authentication in the Swagger UI.
+- **Relationships**: This file is the central hub for wiring up all the different parts of the application. It references the `Data`, `Services`, and `Filters` namespaces.
+
+### **`/appsettings.json`**
+- **Path**: `D:\test c#\wsahRecieveDelivary\appsettings.json`
+- **Purpose**: The main configuration file for the application.
+- **Key Configurations**:
+  - **`ConnectionStrings`**: Contains the connection string for the SQL Server database.
+  - **`JwtSettings`**: Contains the secret key, issuer, and audience for JWT token generation and validation.
+- **Relationships**: The configuration values in this file are read by `Program.cs` and the `JwtService`.
+
+---
+
+### **Controllers (`/Controllers`)**
+
+#### `AuthController.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Controllers\AuthController.cs`
+- **Purpose**: Handles user authentication, including registration and login.
+- **Endpoints**:
+  - `POST /api/Auth/register`: Registers a new user.
+  - `POST /api/Auth/login`: Authenticates a user and returns a JWT token.
+  - `GET /api/Auth/profile`: Returns the profile of the currently authenticated user.
+- **Relationships**: Uses `IAuthService` to perform the business logic for registration and login.
+
+#### `ProcessStageController.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Controllers\ProcessStageController.cs`
+- **Purpose**: Provides CRUD operations for managing the dynamic process stages.
+- **Endpoints**:
+  - `GET /api/ProcessStage`: Gets all active process stages.
+  - `GET /api/ProcessStage/{id}`: Gets a process stage by ID.
+  - `POST /api/ProcessStage`: Creates a new process stage (Admin only).
+  - `PUT /api/ProcessStage/{id}`: Updates a process stage (Admin only).
+  - `DELETE /api/ProcessStage/{id}`: Deactivates a process stage (Admin only).
+- **Relationships**: Directly uses `ApplicationDbContext` to perform database operations.
+
+#### `UserController.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Controllers\UserController.cs`
+- **Purpose**: Manages users, roles, and stage access.
+- **Endpoints**:
+  - `GET /api/User`: Gets a paginated list of all users.
+  - `GET /api/User/{id}`: Gets a user by ID.
+  - `POST /api/User`: Creates a new user.
+  - `PUT /api/User/{id}`: Updates a user.
+  - `DELETE /api/User/{id}`: Deletes a user.
+  - `POST /api/User/{id}/assign-roles`: Assigns roles to a user.
+  - `POST /api/User/{id}/assign-stages`: Assigns process stages to a user.
+- **Relationships**: Uses `IUserService` to perform user management operations.
+
+#### `WashTransactionController.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Controllers\WashTransactionController.cs`
+- **Purpose**: The core controller for managing wash transactions.
+- **Endpoints**:
+  - `POST /api/WashTransaction/receive`: Creates a new "receive" transaction.
+  - `POST /api/WashTransaction/delivery`: Creates a new "delivery" transaction.
+  - `GET /api/WashTransaction/paginated`: Gets a paginated, searchable, and filterable list of all transactions.
+  - `GET /api/WashTransaction/export/csv`: Exports transactions to a CSV file.
+  - A variety of other GET endpoints for retrieving transactions by different criteria (ID, work order, stage, etc.) and for getting balance and status reports.
+- **Relationships**: Uses `IWashTransactionService` for all business logic.
+
+#### `WorkOrderController.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Controllers\WorkOrderController.cs`
+- **Purpose**: Manages work orders.
+- **Endpoints**:
+  - `POST /api/WorkOrder/bulk-upload`: Bulk uploads work orders from an Excel file (Admin only).
+  - `GET /api/WorkOrder/paginated`: Gets a paginated, searchable, and filterable list of all work orders.
+  - Standard CRUD endpoints for work orders.
+- **Relationships**: Uses `IWorkOrderService` for all work order-related business logic.
+
+---
+
+### **Services (`/Services`)**
+
+#### `AuthService.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Services\AuthService.cs`
+- **Purpose**: Implements the business logic for user registration and login.
+- **Key Logic**:
+  - Hashes passwords using BCrypt.
+  - Assigns roles and process stage access to new users.
+  - Generates a JWT token upon successful login.
+- **Relationships**: Uses `ApplicationDbContext` for database access and `IJwtService` to generate tokens.
+
+#### `WashTransactionService.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Services\WashTransactionService.cs`
+- **Purpose**: The heart of the application's business logic.
+- **Key Logic**:
+  - `CreateReceiveAsync` and `CreateDeliveryAsync`: Create transactions and call `UpdateStageBalanceAsync`.
+  - `UpdateStageBalanceAsync`: A private method that calculates and updates the `ProcessStageBalance` for a given work order and stage. This is a critical piece of logic.
+  - `GetPaginatedAsync`: Implements the complex logic for paginating, searching, and filtering transactions.
+  - `ExportToCSVAsync`: Generates a CSV file of transactions based on filter criteria.
+- **Relationships**: Uses `ApplicationDbContext` extensively for all database operations.
+
+#### `WorkOrderService.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Services\WorkOrderService.cs`
+- **Purpose**: Implements the business logic for work orders.
+- **Key Logic**:
+  - `BulkUploadFromExcelAsync`: Contains the complex logic for parsing Excel files, handling different data formats, and creating or updating work orders.
+  - `GetPaginatedAsync`: Implements pagination, searching, and filtering for work orders.
+- **Relationships**: Uses `ApplicationDbContext` for database access.
+
+---
+
+### **Data (`/Data`)**
+
+#### `ApplicationDbContext.cs`
+- **Path**: `D:\test c#\wsahRecieveDelivary\Data\ApplicationDbContext.cs`
+- **Purpose**: The Entity Framework Core database context.
+- **Key Components**:
+  - `DbSet` properties for all the application's models.
+  - `OnModelCreating` method: Configures the database schema, including primary keys, unique constraints, indexes, and relationships between tables. It also seeds the database with initial data for `Roles` and `ProcessStages`.
+- **Relationships**: This class is the bridge between the application's code and the database. It is used by all the services to query and save data.
+
+---
+
+### **Models (`/Models`)**
+
+The models in this directory are simple C# classes that represent the tables in the database. The relationships between them are configured in `ApplicationDbContext.cs`.
+
+- **`WorkOrder.cs`**: Represents a work order.
+- **`WashTransaction.cs`**: Represents a single wash transaction.
+- **`ProcessStage.cs`**: Represents a stage in the wash process.
+- **`ProcessStageBalance.cs`**: Represents the balance of a stage for a work order.
+- **`User.cs`**, **`Role.cs`**, **`UserRole.cs`**, **`UserProcessStageAccess.cs`**: Standard models for user management and access control.
+
+---
+
+## **4. Data Flow & Business Logic**
+
+### **User Registration**
+1. A `POST` request is sent to `/api/Auth/register` with a `RegisterDto`.
+2. `AuthController` calls `_authService.RegisterAsync()`.
+3. `AuthService` checks if the username and email are unique.
+4. It hashes the password using BCrypt and creates a new `User` object.
+5. It assigns roles and process stage access to the user.
+6. The new user and their assigned roles/stages are saved to the database via `ApplicationDbContext`.
+
+### **Creating a Wash Transaction**
+1. A `POST` request is sent to `/api/WashTransaction/receive` or `/api/WashTransaction/delivery` with a `CreateWashTransactionDto`.
+2. `WashTransactionController` calls `_washTransactionService.CreateReceiveAsync()` or `CreateDeliveryAsync()`.
+3. `WashTransactionService` validates the work order and process stage.
+4. It creates a new `WashTransaction` object.
+5. It saves the new transaction to the database.
+6. It calls the private `UpdateStageBalanceAsync` method.
+7. `UpdateStageBalanceAsync` queries all active transactions for the given work order and stage, recalculates the `TotalReceived`, `TotalDelivered`, and `CurrentBalance`, and updates the `ProcessStageBalance` table.
+
+### **Bulk Uploading Work Orders**
+1. An admin user sends a `POST` request to `/api/WorkOrder/bulk-upload` with an Excel file.
+2. `WorkOrderController` calls `_workOrderService.BulkUploadFromExcelAsync()`.
+3. `WorkOrderService` uses the EPPlus library to parse the Excel file row by row.
+4. For each row, it checks if a work order with the given `WorkOrderNo` already exists.
+5. If it exists, it updates the existing work order.
+6. If it doesn't exist, it creates a new work order.
+7. The changes are saved to the database.
+
+## **5. Key Code Snippet: Balance Calculation**
+
+This is the core logic for maintaining data consistency in the `ProcessStageBalance` table. It is found in the `UpdateStageBalanceAsync` method in `WashTransactionService.cs`.
+
+```csharp
+private async Task UpdateStageBalanceAsync(int workOrderId, int processStageId)
+{
+    var balance = await _context.ProcessStageBalances
+        .FirstOrDefaultAsync(b => b.WorkOrderId == workOrderId && b.ProcessStageId == processStageId);
+
+    if (balance == null)
+    {
+        balance = new ProcessStageBalance
+        {
+            WorkOrderId = workOrderId,
+            ProcessStageId = processStageId
+        };
+        _context.ProcessStageBalances.Add(balance);
+    }
+
+    var transactions = await _context.WashTransactions
+        .Where(t => t.WorkOrderId == workOrderId && t.ProcessStageId == processStageId && t.IsActive)
+        .ToListAsync();
+
+    balance.TotalReceived = transactions
+        .Where(t => t.TransactionType == TransactionType.Receive)
+        .Sum(t => t.Quantity);
+
+    balance.TotalDelivered = transactions
+        .Where(t => t.TransactionType == TransactionType.Delivery)
+        .Sum(t => t.Quantity);
+
+    balance.CurrentBalance = balance.TotalReceived - balance.TotalDelivered;
+
+    balance.LastReceiveDate = transactions
+        .Where(t => t.TransactionType == TransactionType.Receive)
+        .OrderByDescending(t => t.TransactionDate)
+        .Select(t => (DateTime?)t.TransactionDate)
+        .FirstOrDefault();
+
+    balance.LastDeliveryDate = transactions
+        .Where(t => t.TransactionType == TransactionType.Delivery)
+        .OrderByDescending(t => t.TransactionDate)
+        .Select(t => (DateTime?)t.TransactionDate)
+        .FirstOrDefault();
+
+    balance.LastUpdated = GetBdTime();
+
+    await _context.SaveChangesAsync();
+}
+```
+
+This detailed context should provide a solid foundation for any future work on this project.
