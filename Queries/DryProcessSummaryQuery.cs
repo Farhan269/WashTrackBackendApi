@@ -184,7 +184,7 @@ TargetData AS
         END AS Shift,
 
         SUM(whdp.DailyTarget) AS DayTarget,
-        AVG(CAST(whdp.ManPower AS DECIMAL(18,2))) AS ManPower,
+        round(AVG(CAST(whdp.ManPower AS DECIMAL(18,2))),0) AS ManPower,
         AVG(CAST(whdp.SMV AS DECIMAL(18,2))) AS SMV
 
     FROM WorkingHourDetailManPower whdp
@@ -233,7 +233,7 @@ SELECT
     SUM(ISNULL(i.IssueQty,0)) AS IssueQty,
 
     SUM(ISNULL(t.DayTarget,0)) AS DayTarget,
-    AVG(ISNULL(t.ManPower,0)) AS ManPower,
+    round(AVG(ISNULL(t.ManPower,0)),0) AS ManPower,
     AVG(ISNULL(t.SMV,0)) AS SMV,
 
     -- DHU
@@ -617,7 +617,7 @@ TargetData AS
         END AS Shift,
 
         SUM(whdp.DailyTarget) AS DayTarget,
-        AVG(CAST(whdp.ManPower AS DECIMAL(18,2))) AS ManPower,
+       round( AVG(CAST(whdp.ManPower AS DECIMAL(18,2))),0) AS ManPower,
         AVG(CAST(whdp.SMV AS DECIMAL(18,2))) AS SMV
 
     FROM WorkingHourDetailManPower whdp
@@ -666,7 +666,7 @@ SELECT
     SUM(ISNULL(i.IssueQty,0)) AS IssueQty,
 
     SUM(ISNULL(t.DayTarget,0)) AS DayTarget,
-    AVG(ISNULL(t.ManPower,0)) AS ManPower,
+    round(AVG(ISNULL(t.ManPower,0)),0) AS ManPower,
     AVG(ISNULL(t.SMV,0)) AS SMV,
 
     -- DHU
@@ -735,35 +735,34 @@ ORDER BY
 
 
         public const string GetWetTopIssues = @"
-WITH BaseFiltered AS
+WITH Base AS
 (
     SELECT
-        fdpqi.WashBatchCardQcId,
-        fdpqi.WashProcessIssueId,
-
-        fdq.WashBatchCardId,
-        fdq.WashProcessId,
-        fdq.CreateDate,
-
         pm.Id AS ProcessModuleId,
         pm.Name AS ProcessModuleName,
 
+        wp.Id AS WashProcessId,
         wp.ProcessName,
-        wp.UnitId,
 
+        wpi.Id AS WashProcessIssueId,
         wpi.IssueName,
 
+        pu.PlantId,
+        wp.UnitId,
+
         CASE
-            WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
-                THEN CONVERT(DATE, fdq.CreateDate)
-            ELSE CONVERT(DATE, DATEADD(DAY,-1,fdq.CreateDate))
+            WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
+                THEN CAST(fdq.CreateDate AS DATE)
+            ELSE CAST(DATEADD(DAY, -1, fdq.CreateDate) AS DATE)
         END AS OperationalDate,
 
         CASE
-            WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
-             AND CONVERT(TIME, fdq.CreateDate) < '20:00:00'
+            WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
+             AND CAST(fdq.CreateDate AS TIME) < '20:00:00'
             THEN 1 ELSE 2
-        END AS Shift
+        END AS Shift,
+
+        1 AS IssueQty
 
     FROM WashBatchCardQcIsue fdpqi
 
@@ -777,7 +776,7 @@ WITH BaseFiltered AS
         ON fdp.ProcessModuleId = pm.Id
 
     JOIN WashProcess wp
-        ON fdq.WashProcessId = wp.Id
+        ON fdq.WashProcessId = wp.Id   -- ✅ FIX HERE (IMPORTANT)
 
     JOIN WashProcessIssue wpi
         ON fdpqi.WashProcessIssueId = wpi.Id
@@ -793,8 +792,13 @@ WITH BaseFiltered AS
 
         AND (
             @FromDate IS NULL OR @ToDate IS NULL
-            OR CONVERT(DATE, fdq.CreateDate)
-            BETWEEN @FromDate AND @ToDate
+            OR (
+                CASE
+                    WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
+                        THEN CAST(fdq.CreateDate AS DATE)
+                    ELSE CAST(DATEADD(DAY, -1, fdq.CreateDate) AS DATE)
+                END
+            ) BETWEEN @FromDate AND @ToDate
         )
 
         AND (
@@ -821,8 +825,8 @@ WITH BaseFiltered AS
             @ShiftList IS NULL
             OR (
                 CASE
-                    WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
-                     AND CONVERT(TIME, fdq.CreateDate) < '20:00:00'
+                    WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
+                     AND CAST(fdq.CreateDate AS TIME) < '20:00:00'
                     THEN 1 ELSE 2
                 END
             ) IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@ShiftList, ','))
@@ -838,8 +842,8 @@ Agg AS
         ProcessName,
         WashProcessIssueId,
         IssueName,
-        COUNT_BIG(*) AS IssueQty
-    FROM BaseFiltered
+        SUM(CAST(IssueQty AS BIGINT)) AS IssueQty
+    FROM Base
     GROUP BY
         ProcessModuleId,
         ProcessModuleName,
