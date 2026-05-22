@@ -102,6 +102,7 @@ try
     builder.Services.AddScoped<IWashPlan, WashPlanService>();
     builder.Services.AddScoped<IOutServiceApi, OutApiService>();
     builder.Services.AddScoped<IWashDhuRepository, WashDhuRepository>();
+
     // ✅ External API Sync
     builder.Services.AddHttpClient<IExternalApiSyncService, ExternalApiSyncService>();
     builder.Services.AddScoped<IExternalApiSyncService, ExternalApiSyncService>();
