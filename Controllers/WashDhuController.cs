@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using wsahRecieveDelivary.DTOs;
 using wsahRecieveDelivary.WashService;
 
@@ -7,6 +8,7 @@ namespace wsahRecieveDelivary.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [AllowAnonymous]
     public class WashDhuController : ControllerBase
     {
         private readonly WashDhuService _service;
@@ -26,7 +28,7 @@ namespace wsahRecieveDelivary.Controllers
 
             return Ok(result);
         }
-
+        
         [HttpGet("GetTopIssues")]
         public async Task<IActionResult> GetTopIssues([FromQuery] DryProcessSummaryFilterDto filter)
         {

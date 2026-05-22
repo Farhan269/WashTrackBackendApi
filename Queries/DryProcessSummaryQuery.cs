@@ -3,10 +3,67 @@
     public static class DryProcessSummaryQuery
     {
         public const string GetSummary = @"
-WITH QcData AS
+WITH BaseQc AS
 (
-    SELECT 
+    SELECT
+        fdpq.Id,
+        fdpq.FirstDryProcessId,
         fdpq.WashProcessId,
+        fdpq.QcStatusId,
+        fdpq.CreateDate,
+
+        -- Operational Date
+        CASE
+            WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                THEN CONVERT(DATE, fdpq.CreateDate)
+            ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+        END AS OperationalDate,
+
+        -- Shift
+        CASE
+            WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+             AND CONVERT(TIME, fdpq.CreateDate) < '20:00:00'
+            THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM FirstDryProcessQc fdpq
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        AND
+        (
+            @FromDate IS NULL
+            OR
+            (
+                CASE
+                    WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                        THEN CONVERT(DATE, fdpq.CreateDate)
+                    ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+                END
+            ) >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR
+            (
+                CASE
+                    WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                        THEN CONVERT(DATE, fdpq.CreateDate)
+                    ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+                END
+            ) <= @ToDate
+        )
+),
+
+QcData AS
+(
+    SELECT
+        b.WashProcessId,
         wp.ProcessName,
 
         fdp.ProcessModuleId,
@@ -15,112 +72,105 @@ WITH QcData AS
         pu.PlantId,
         fdp.UnitId,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END AS OperationalDate,
+        b.OperationalDate,
+        b.Shift,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END AS Shift,
+        SUM(CASE WHEN b.QcStatusId IN (1,3) THEN 1 ELSE 0 END) AS PassQty,
+        SUM(CASE WHEN b.QcStatusId = 2 THEN 1 ELSE 0 END) AS DefectQty,
+        SUM(CASE WHEN b.QcStatusId = 4 THEN 1 ELSE 0 END) AS RejectQty
 
-        SUM(CASE WHEN fdpq.QcStatusId IN (1,3) THEN 1 ELSE 0 END) AS PassQty,
-        SUM(CASE WHEN fdpq.QcStatusId = 2 THEN 1 ELSE 0 END) AS DefectQty,
-        SUM(CASE WHEN fdpq.QcStatusId = 4 THEN 1 ELSE 0 END) AS RejectQty
+    FROM BaseQc b
 
-    FROM FirstDryProcessQc fdpq
-    JOIN WashProcess wp ON fdpq.WashProcessId = wp.Id
-    JOIN FirstDryProcess fdp ON fdpq.FirstDryProcessId = fdp.Id
-    JOIN ProcessModule pm ON fdp.ProcessModuleId = pm.Id
-    JOIN PlantUnit pu ON fdp.UnitId = pu.Id
+    JOIN FirstDryProcess fdp
+        ON b.FirstDryProcessId = fdp.Id
 
-    WHERE 
-        fdpq.IsDeleted = 0
-        AND fdpq.IsActive = 1
+    JOIN WashProcess wp
+        ON b.WashProcessId = wp.Id
 
-        AND (
-            CASE
-                WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                    THEN CAST(fdpq.CreateDate AS DATE)
-                ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-            END
-        ) BETWEEN @FromDate AND @ToDate
+    JOIN ProcessModule pm
+        ON fdp.ProcessModuleId = pm.Id
 
-        AND (@PlantIds IS NULL OR pu.PlantId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@PlantIds, ',')))
-        AND (@UnitIds IS NULL OR fdp.UnitId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@UnitIds, ',')))
-        AND (@ProcessModuleIds IS NULL OR fdp.ProcessModuleId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@ProcessModuleIds, ',')))
-        AND (@WashProcessIds IS NULL OR fdpq.WashProcessId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@WashProcessIds, ',')))
+    JOIN PlantUnit pu
+        ON fdp.UnitId = pu.Id
+
+    WHERE
+        (@PlantIds IS NULL
+            OR pu.PlantId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@PlantIds, ',')
+            )
+        )
+
+        AND (@UnitIds IS NULL
+            OR fdp.UnitId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@UnitIds, ',')
+            )
+        )
+
+        AND (@ProcessModuleIds IS NULL
+            OR fdp.ProcessModuleId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@ProcessModuleIds, ',')
+            )
+        )
+
+        AND (@WashProcessIds IS NULL
+            OR b.WashProcessId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@WashProcessIds, ',')
+            )
+        )
+
+        AND (@ShiftList IS NULL
+            OR b.Shift IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@ShiftList, ',')
+            )
+        )
 
     GROUP BY
-        fdpq.WashProcessId,
+        b.WashProcessId,
         wp.ProcessName,
         fdp.ProcessModuleId,
         pm.Name,
         pu.PlantId,
         fdp.UnitId,
-
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END,
-
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END
+        b.OperationalDate,
+        b.Shift
 ),
 
 IssueData AS
 (
-    SELECT  
+    SELECT
         fdp.UnitId,
         fdp.ProcessModuleId,
-        fdpq.WashProcessId,
+        b.WashProcessId,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END AS OperationalDate,
+        b.OperationalDate,
+        b.Shift,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END AS Shift,
+        COUNT_BIG(*) AS IssueQty
 
-        COUNT(*) AS IssueQty
+    FROM FirstDryProcessQcIsuee qi
 
-    FROM FirstDryProcessQcIsuee fdpqi
-    JOIN FirstDryProcessQc fdpq ON fdpqi.FirstDryProcessQcId = fdpq.Id
-    JOIN FirstDryProcess fdp ON fdpq.FirstDryProcessId = fdp.Id
+    JOIN BaseQc b
+        ON qi.FirstDryProcessQcId = b.Id
 
-    WHERE fdpq.IsDeleted = 0 AND fdpq.IsActive = 1
+    JOIN FirstDryProcess fdp
+        ON b.FirstDryProcessId = fdp.Id
 
     GROUP BY
         fdp.UnitId,
         fdp.ProcessModuleId,
-        fdpq.WashProcessId,
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END,
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift
 ),
 
 TargetData AS
 (
-    SELECT 
+    SELECT
         wh.WorkingHourDay AS OperationalDate,
         wh.UnitId,
         wp.ProcessModuleId,
@@ -128,8 +178,9 @@ TargetData AS
 
         CASE
             WHEN whd.StartTime >= '08:00:00'
-             AND whd.EndTime <= '19:59:00'
-            THEN 1 ELSE 2
+             AND whd.EndTime < '20:00:00'
+            THEN 1
+            ELSE 2
         END AS Shift,
 
         SUM(whdp.DailyTarget) AS DayTarget,
@@ -137,30 +188,41 @@ TargetData AS
         AVG(CAST(whdp.SMV AS DECIMAL(18,2))) AS SMV
 
     FROM WorkingHourDetailManPower whdp
-    JOIN WorkingHourDetail whd ON whdp.WorkingHourDetailId = whd.Id
-    JOIN WorkingHour wh ON whd.WorkingHourId = wh.Id
-    JOIN WashProcess wp ON whdp.WashProcessId = wp.Id
 
-    WHERE 
+    JOIN WorkingHourDetail whd
+        ON whdp.WorkingHourDetailId = whd.Id
+
+    JOIN WorkingHour wh
+        ON whd.WorkingHourId = wh.Id
+
+    JOIN WashProcess wp
+        ON whdp.WashProcessId = wp.Id
+
+    WHERE
         whdp.IsActive = 1
         AND whdp.IsDeleted = 0
-        AND wh.WorkingHourDay BETWEEN @FromDate AND @ToDate
 
-    GROUP BY 
+        AND (@FromDate IS NULL OR wh.WorkingHourDay >= @FromDate)
+        AND (@ToDate IS NULL OR wh.WorkingHourDay <= @ToDate)
+
+    GROUP BY
         wh.WorkingHourDay,
         wh.UnitId,
         wp.ProcessModuleId,
         whdp.WashProcessId,
+
         CASE
             WHEN whd.StartTime >= '08:00:00'
-             AND whd.EndTime <= '19:59:00'
-            THEN 1 ELSE 2
+             AND whd.EndTime < '20:00:00'
+            THEN 1
+            ELSE 2
         END
 )
 
-SELECT 
+SELECT
     q.ProcessModuleId,
     q.ProcessModuleName,
+
     q.WashProcessId,
     q.ProcessName,
 
@@ -169,35 +231,45 @@ SELECT
     SUM(q.RejectQty) AS RejectQty,
 
     SUM(ISNULL(i.IssueQty,0)) AS IssueQty,
-    SUM(ISNULL(t.DayTarget,0)) AS TargetQty,
 
+    SUM(ISNULL(t.DayTarget,0)) AS DayTarget,
     AVG(ISNULL(t.ManPower,0)) AS ManPower,
     AVG(ISNULL(t.SMV,0)) AS SMV,
 
     -- DHU
-    CASE 
+    CASE
         WHEN SUM(q.PassQty) = 0 THEN 0
         ELSE CAST(
-            (SUM(ISNULL(i.IssueQty,0)) * 100.0) /
-            NULLIF(SUM(q.PassQty),0)
+            (SUM(ISNULL(i.IssueQty,0)) * 100.0)
+            / SUM(q.PassQty)
         AS DECIMAL(18,2))
     END AS DHU,
 
-    -- Plan Efficiency
+    -- PlanEff
     CASE
-        WHEN AVG(ISNULL(t.ManPower,0)) = 0 OR AVG(ISNULL(t.SMV,0)) = 0 THEN 0
+        WHEN AVG(ISNULL(t.ManPower,0)) = 0
+          OR AVG(ISNULL(t.SMV,0)) = 0
+        THEN 0
         ELSE CAST(
-            (SUM(ISNULL(t.DayTarget,0)) * AVG(ISNULL(t.SMV,0)) * 100.0)
-            / (11 * AVG(ISNULL(t.ManPower,0)) * 60)
+            (SUM(ISNULL(t.DayTarget,0))
+            * AVG(ISNULL(t.SMV,0))
+            * 100.0)
+            /
+            (11 * AVG(ISNULL(t.ManPower,0)) * 60)
         AS DECIMAL(18,2))
     END AS PlanEff,
 
-    -- Actual Efficiency
+    -- ActualEff
     CASE
-        WHEN AVG(ISNULL(t.ManPower,0)) = 0 OR AVG(ISNULL(t.SMV,0)) = 0 THEN 0
+        WHEN AVG(ISNULL(t.ManPower,0)) = 0
+          OR AVG(ISNULL(t.SMV,0)) = 0
+        THEN 0
         ELSE CAST(
-            (SUM(q.PassQty) * AVG(ISNULL(t.SMV,0)) * 100.0)
-            / (11 * AVG(ISNULL(t.ManPower,0)) * 60)
+            (SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV,0))
+            * 100.0)
+            /
+            (11 * AVG(ISNULL(t.ManPower,0)) * 60)
         AS DECIMAL(18,2))
     END AS ActualEff
 
@@ -363,10 +435,68 @@ ORDER BY IssueQty DESC;
 
 
         public const string GetWetSummary = @"
-WITH QcData AS
+WITH BaseQc AS
 (
-    SELECT 
+    SELECT
+        fdpq.Id,
+        fdpq.WashBatchCardId,
         fdpq.WashProcessId,
+        fdpq.QcStatusId,
+		fdpq.Quantity,
+        fdpq.CreateDate,
+	
+        -- Operational Date
+        CASE
+            WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                THEN CONVERT(DATE, fdpq.CreateDate)
+            ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+        END AS OperationalDate,
+
+        -- Shift
+        CASE
+            WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+             AND CONVERT(TIME, fdpq.CreateDate) < '20:00:00'
+            THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM WashBatchCardQc fdpq
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        AND
+        (
+            @FromDate IS NULL
+            OR
+            (
+                CASE
+                    WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                        THEN CONVERT(DATE, fdpq.CreateDate)
+                    ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+                END
+            ) >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR
+            (
+                CASE
+                    WHEN CONVERT(TIME, fdpq.CreateDate) >= '08:00:00'
+                        THEN CONVERT(DATE, fdpq.CreateDate)
+                    ELSE CONVERT(DATE, DATEADD(DAY,-1,fdpq.CreateDate))
+                END
+            ) <= @ToDate
+        )
+),
+
+QcData AS
+(
+    SELECT
+        b.WashProcessId,
         wp.ProcessName,
 
         fdp.ProcessModuleId,
@@ -375,112 +505,105 @@ WITH QcData AS
         pu.PlantId,
         fdp.UnitId,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END AS OperationalDate,
+        b.OperationalDate,
+        b.Shift,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END AS Shift,
+        SUM(CASE WHEN b.QcStatusId IN (1,3) THEN Quantity ELSE 0 END) AS PassQty,
+        SUM(CASE WHEN b.QcStatusId = 2 THEN Quantity ELSE 0 END) AS DefectQty,
+        SUM(CASE WHEN b.QcStatusId = 4 THEN Quantity ELSE 0 END) AS RejectQty
 
-        SUM(CASE WHEN fdpq.QcStatusId IN (1,3) THEN Quantity ELSE 0 END) AS PassQty,
-        SUM(CASE WHEN fdpq.QcStatusId = 2 THEN Quantity ELSE 0 END) AS DefectQty,
-        SUM(CASE WHEN fdpq.QcStatusId = 4 THEN Quantity ELSE 0 END) AS RejectQty
+    FROM BaseQc b
 
-    FROM WashBatchCardQc fdpq
-    JOIN WashProcess wp ON fdpq.WashProcessId = wp.Id
-    JOIN WashBatchCard fdp ON fdpq.WashBatchCardId = fdp.Id
-    JOIN ProcessModule pm ON fdp.ProcessModuleId = pm.Id
-    JOIN PlantUnit pu ON fdp.UnitId = pu.Id
+    JOIN WashBatchCard fdp
+        ON b.WashBatchCardId = fdp.Id
 
-    WHERE 
-        fdpq.IsDeleted = 0
-        AND fdpq.IsActive = 1
+    JOIN WashProcess wp
+        ON b.WashProcessId = wp.Id
 
-        AND (
-            CASE
-                WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                    THEN CAST(fdpq.CreateDate AS DATE)
-                ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-            END
-        ) BETWEEN @FromDate AND @ToDate
+    JOIN ProcessModule pm
+        ON fdp.ProcessModuleId = pm.Id
 
-        AND (@PlantIds IS NULL OR pu.PlantId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@PlantIds, ',')))
-        AND (@UnitIds IS NULL OR fdp.UnitId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@UnitIds, ',')))
-        AND (@ProcessModuleIds IS NULL OR fdp.ProcessModuleId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@ProcessModuleIds, ',')))
-        AND (@WashProcessIds IS NULL OR fdpq.WashProcessId IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@WashProcessIds, ',')))
+    JOIN PlantUnit pu
+        ON fdp.UnitId = pu.Id
+
+    WHERE
+        (@PlantIds IS NULL
+            OR pu.PlantId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@PlantIds, ',')
+            )
+        )
+
+        AND (@UnitIds IS NULL
+            OR fdp.UnitId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@UnitIds, ',')
+            )
+        )
+
+        AND (@ProcessModuleIds IS NULL
+            OR fdp.ProcessModuleId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@ProcessModuleIds, ',')
+            )
+        )
+
+        AND (@WashProcessIds IS NULL
+            OR b.WashProcessId IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@WashProcessIds, ',')
+            )
+        )
+
+        AND (@ShiftList IS NULL
+            OR b.Shift IN (
+                SELECT TRY_CAST(value AS INT)
+                FROM STRING_SPLIT(@ShiftList, ',')
+            )
+        )
 
     GROUP BY
-        fdpq.WashProcessId,
+        b.WashProcessId,
         wp.ProcessName,
         fdp.ProcessModuleId,
         pm.Name,
         pu.PlantId,
         fdp.UnitId,
-
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END,
-
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END
+        b.OperationalDate,
+        b.Shift
 ),
 
 IssueData AS
 (
-    SELECT  
+    SELECT
         fdp.UnitId,
         fdp.ProcessModuleId,
-        fdpq.WashProcessId,
+        b.WashProcessId,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END AS OperationalDate,
+        b.OperationalDate,
+        b.Shift,
 
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END AS Shift,
+        COUNT_BIG(*) AS IssueQty
 
-        COUNT(*) AS IssueQty
+    FROM WashBatchCardQcIsue qi
 
-    FROM WashBatchCardQcIsue fdpqi
-    JOIN WashBatchCardQc fdpq ON fdpqi.WashBatchCardQcId = fdpq.Id
-    JOIN WashBatchCard fdp ON fdpq.WashBatchCardId = fdp.Id
+    JOIN BaseQc b
+        ON qi.WashBatchCardQcId = b.Id
 
-    WHERE fdpq.IsDeleted = 0 AND fdpq.IsActive = 1
+    JOIN WashBatchCard fdp
+        ON b.WashBatchCardId = fdp.Id
 
     GROUP BY
         fdp.UnitId,
         fdp.ProcessModuleId,
-        fdpq.WashProcessId,
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdpq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY,-1,fdpq.CreateDate) AS DATE)
-        END,
-        CASE
-            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
-            THEN 1 ELSE 2
-        END
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift
 ),
 
 TargetData AS
 (
-    SELECT 
+    SELECT
         wh.WorkingHourDay AS OperationalDate,
         wh.UnitId,
         wp.ProcessModuleId,
@@ -488,8 +611,9 @@ TargetData AS
 
         CASE
             WHEN whd.StartTime >= '08:00:00'
-             AND whd.EndTime <= '19:59:00'
-            THEN 1 ELSE 2
+             AND whd.EndTime < '20:00:00'
+            THEN 1
+            ELSE 2
         END AS Shift,
 
         SUM(whdp.DailyTarget) AS DayTarget,
@@ -497,30 +621,41 @@ TargetData AS
         AVG(CAST(whdp.SMV AS DECIMAL(18,2))) AS SMV
 
     FROM WorkingHourDetailManPower whdp
-    JOIN WorkingHourDetail whd ON whdp.WorkingHourDetailId = whd.Id
-    JOIN WorkingHour wh ON whd.WorkingHourId = wh.Id
-    JOIN WashProcess wp ON whdp.WashProcessId = wp.Id
 
-    WHERE 
+    JOIN WorkingHourDetail whd
+        ON whdp.WorkingHourDetailId = whd.Id
+
+    JOIN WorkingHour wh
+        ON whd.WorkingHourId = wh.Id
+
+    JOIN WashProcess wp
+        ON whdp.WashProcessId = wp.Id
+
+    WHERE
         whdp.IsActive = 1
         AND whdp.IsDeleted = 0
-        AND wh.WorkingHourDay BETWEEN @FromDate AND @ToDate
 
-    GROUP BY 
+        AND (@FromDate IS NULL OR wh.WorkingHourDay >= @FromDate)
+        AND (@ToDate IS NULL OR wh.WorkingHourDay <= @ToDate)
+
+    GROUP BY
         wh.WorkingHourDay,
         wh.UnitId,
         wp.ProcessModuleId,
         whdp.WashProcessId,
+
         CASE
             WHEN whd.StartTime >= '08:00:00'
-             AND whd.EndTime <= '19:59:00'
-            THEN 1 ELSE 2
+             AND whd.EndTime < '20:00:00'
+            THEN 1
+            ELSE 2
         END
 )
 
-SELECT 
+SELECT
     q.ProcessModuleId,
     q.ProcessModuleName,
+
     q.WashProcessId,
     q.ProcessName,
 
@@ -529,35 +664,45 @@ SELECT
     SUM(q.RejectQty) AS RejectQty,
 
     SUM(ISNULL(i.IssueQty,0)) AS IssueQty,
-    SUM(ISNULL(t.DayTarget,0)) AS TargetQty,
 
+    SUM(ISNULL(t.DayTarget,0)) AS DayTarget,
     AVG(ISNULL(t.ManPower,0)) AS ManPower,
     AVG(ISNULL(t.SMV,0)) AS SMV,
 
     -- DHU
-    CASE 
+    CASE
         WHEN SUM(q.PassQty) = 0 THEN 0
         ELSE CAST(
-            (SUM(ISNULL(i.IssueQty,0)) * 100.0) /
-            NULLIF(SUM(q.PassQty),0)
+            (SUM(ISNULL(i.IssueQty,0)) * 100.0)
+            / SUM(q.PassQty)
         AS DECIMAL(18,2))
     END AS DHU,
 
-    -- Plan Efficiency
+    -- PlanEff
     CASE
-        WHEN AVG(ISNULL(t.ManPower,0)) = 0 OR AVG(ISNULL(t.SMV,0)) = 0 THEN 0
+        WHEN AVG(ISNULL(t.ManPower,0)) = 0
+          OR AVG(ISNULL(t.SMV,0)) = 0
+        THEN 0
         ELSE CAST(
-            (SUM(ISNULL(t.DayTarget,0)) * AVG(ISNULL(t.SMV,0)) * 100.0)
-            / (11 * AVG(ISNULL(t.ManPower,0)) * 60)
+            (SUM(ISNULL(t.DayTarget,0))
+            * AVG(ISNULL(t.SMV,0))
+            * 100.0)
+            /
+            (11 * AVG(ISNULL(t.ManPower,0)) * 60)
         AS DECIMAL(18,2))
     END AS PlanEff,
 
-    -- Actual Efficiency
+    -- ActualEff
     CASE
-        WHEN AVG(ISNULL(t.ManPower,0)) = 0 OR AVG(ISNULL(t.SMV,0)) = 0 THEN 0
+        WHEN AVG(ISNULL(t.ManPower,0)) = 0
+          OR AVG(ISNULL(t.SMV,0)) = 0
+        THEN 0
         ELSE CAST(
-            (SUM(q.PassQty) * AVG(ISNULL(t.SMV,0)) * 100.0)
-            / (11 * AVG(ISNULL(t.ManPower,0)) * 60)
+            (SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV,0))
+            * 100.0)
+            /
+            (11 * AVG(ISNULL(t.ManPower,0)) * 60)
         AS DECIMAL(18,2))
     END AS ActualEff
 
@@ -590,34 +735,35 @@ ORDER BY
 
 
         public const string GetWetTopIssues = @"
-WITH Base AS
+WITH BaseFiltered AS
 (
     SELECT
+        fdpqi.WashBatchCardQcId,
+        fdpqi.WashProcessIssueId,
+
+        fdq.WashBatchCardId,
+        fdq.WashProcessId,
+        fdq.CreateDate,
+
         pm.Id AS ProcessModuleId,
         pm.Name AS ProcessModuleName,
 
-        wp.Id AS WashProcessId,
         wp.ProcessName,
-
-        wpi.Id AS WashProcessIssueId,
-        wpi.IssueName,
-
-        pu.PlantId,
         wp.UnitId,
 
+        wpi.IssueName,
+
         CASE
-            WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
-                THEN CAST(fdq.CreateDate AS DATE)
-            ELSE CAST(DATEADD(DAY, -1, fdq.CreateDate) AS DATE)
+            WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
+                THEN CONVERT(DATE, fdq.CreateDate)
+            ELSE CONVERT(DATE, DATEADD(DAY,-1,fdq.CreateDate))
         END AS OperationalDate,
 
         CASE
-            WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
-             AND CAST(fdq.CreateDate AS TIME) < '20:00:00'
+            WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
+             AND CONVERT(TIME, fdq.CreateDate) < '20:00:00'
             THEN 1 ELSE 2
-        END AS Shift,
-
-        1 AS IssueQty
+        END AS Shift
 
     FROM WashBatchCardQcIsue fdpqi
 
@@ -631,7 +777,7 @@ WITH Base AS
         ON fdp.ProcessModuleId = pm.Id
 
     JOIN WashProcess wp
-        ON fdq.WashProcessId = wp.Id   -- ✅ FIX HERE (IMPORTANT)
+        ON fdq.WashProcessId = wp.Id
 
     JOIN WashProcessIssue wpi
         ON fdpqi.WashProcessIssueId = wpi.Id
@@ -647,13 +793,8 @@ WITH Base AS
 
         AND (
             @FromDate IS NULL OR @ToDate IS NULL
-            OR (
-                CASE
-                    WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
-                        THEN CAST(fdq.CreateDate AS DATE)
-                    ELSE CAST(DATEADD(DAY, -1, fdq.CreateDate) AS DATE)
-                END
-            ) BETWEEN @FromDate AND @ToDate
+            OR CONVERT(DATE, fdq.CreateDate)
+            BETWEEN @FromDate AND @ToDate
         )
 
         AND (
@@ -680,8 +821,8 @@ WITH Base AS
             @ShiftList IS NULL
             OR (
                 CASE
-                    WHEN CAST(fdq.CreateDate AS TIME) >= '08:00:00'
-                     AND CAST(fdq.CreateDate AS TIME) < '20:00:00'
+                    WHEN CONVERT(TIME, fdq.CreateDate) >= '08:00:00'
+                     AND CONVERT(TIME, fdq.CreateDate) < '20:00:00'
                     THEN 1 ELSE 2
                 END
             ) IN (SELECT TRY_CAST(value AS INT) FROM STRING_SPLIT(@ShiftList, ','))
@@ -697,8 +838,8 @@ Agg AS
         ProcessName,
         WashProcessIssueId,
         IssueName,
-        SUM(CAST(IssueQty AS BIGINT)) AS IssueQty
-    FROM Base
+        COUNT_BIG(*) AS IssueQty
+    FROM BaseFiltered
     GROUP BY
         ProcessModuleId,
         ProcessModuleName,

@@ -7,6 +7,7 @@ namespace wsahRecieveDelivary.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [AllowAnonymous]
     //[Authorize]
     public class DashboardController : ControllerBase
     {

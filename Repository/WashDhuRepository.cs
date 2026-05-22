@@ -49,7 +49,7 @@ DryProcessSummaryFilterDto filter)
 
             var result = await connection.QueryAsync<DhuDryProcessSummaryDTO>(
                 DryProcessSummaryQuery.GetSummary,
-                parameters
+                parameters, commandTimeout: 300
             );
 
             return result;
@@ -87,7 +87,7 @@ DryProcessSummaryFilterDto filter)
                    : null
             };
 
-            var result = await connection.QueryAsync<TopIssueDTO>(DryProcessSummaryQuery.GetTopIssues,parameters
+            var result = await connection.QueryAsync<TopIssueDTO>(DryProcessSummaryQuery.GetTopIssues,parameters, commandTimeout: 300
             );
 
             return result;
@@ -126,7 +126,7 @@ DryProcessSummaryFilterDto filter)
 
             var result = await connection.QueryAsync<DhuDryProcessSummaryDTO>(
                 DryProcessSummaryQuery.GetWetSummary,
-                parameters
+                parameters, commandTimeout: 300
             );
 
             return result;
@@ -163,7 +163,7 @@ DryProcessSummaryFilterDto filter)
                    : null
             };
 
-            var result = await connection.QueryAsync<TopIssueDTO>(DryProcessSummaryQuery.GetWetTopIssues, parameters
+            var result = await connection.QueryAsync<TopIssueDTO>(DryProcessSummaryQuery.GetWetTopIssues, parameters, commandTimeout: 300
             );
 
             return result;
