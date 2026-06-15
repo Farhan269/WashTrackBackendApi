@@ -72,6 +72,9 @@ namespace wsahRecieveDelivary.DTOs
 
         [JsonProperty("secondWashBatchTime")]
         public string? SecondWashBatchTime{ get; set; }
+        [JsonProperty("Status")]
+        public long? Status { get; set; }
+
     }
 
     // ==========================================

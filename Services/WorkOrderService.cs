@@ -783,6 +783,7 @@ namespace wsahRecieveDelivary.Services
         public async Task<List<WorkOrderResponseDto>> GetAllAsync()
         {
             var workOrders = await _context.WorkOrders
+                .Where(w => w.Status != 5)
                 .Include(w => w.CreatedByUser)
                 .Include(w => w.UpdatedByUser)
                 .OrderByDescending(w => w.CreatedAt)

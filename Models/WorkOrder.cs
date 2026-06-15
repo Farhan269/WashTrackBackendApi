@@ -81,5 +81,7 @@ namespace wsahRecieveDelivary.Models
         public string? SecondWashBatchQty { get; set; }
         [StringLength(100)]
         public string? SecondWashBatchTime { get; set; }
+
+        public long? Status { get; set; }
     }
 }

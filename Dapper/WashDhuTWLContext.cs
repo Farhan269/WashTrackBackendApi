@@ -3,11 +3,11 @@ using System.Data;
 
 namespace wsahRecieveDelivary.Dapper
 {
-    public class WashDhuContext
+    public class WashDhuTWLContext
     {
         private readonly IConfiguration _configuration;
 
-        public WashDhuContext(IConfiguration configuration)
+        public WashDhuTWLContext(IConfiguration configuration)
         {
             _configuration = configuration;
         }
@@ -15,9 +15,7 @@ namespace wsahRecieveDelivary.Dapper
         public IDbConnection CreateConnection()
         {
             return new SqlConnection(
-                _configuration.GetConnectionString("WashDhu"));
-           
-           
+                _configuration.GetConnectionString("WashDhuTWL"));
         }
     }
 }

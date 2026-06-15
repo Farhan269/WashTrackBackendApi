@@ -90,6 +90,7 @@ try
 
     ///Dapper
     builder.Services.AddSingleton<WashDhuContext>();
+    builder.Services.AddSingleton<WashDhuTWLContext>();
 
     // Register Services
     builder.Services.AddScoped<IJwtService, JwtService>();

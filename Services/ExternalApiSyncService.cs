@@ -1,10 +1,10 @@
 
-////using Microsoft.EntityFrameworkCore;
-////using Newtonsoft.Json;
-////using System.Globalization;
-////using wsahRecieveDelivary.Data;
-////using wsahRecieveDelivary.DTOs;
-////using wsahRecieveDelivary.Models;
+//using Microsoft.EntityFrameworkCore;
+//using Newtonsoft.Json;
+//using System.Globalization;
+//using wsahRecieveDelivary.Data;
+//using wsahRecieveDelivary.DTOs;
+//using wsahRecieveDelivary.Models;
 
 ////namespace wsahRecieveDelivary.Services
 ////{
@@ -587,10 +587,11 @@
 
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using System.Collections.Generic;
 using wsahRecieveDelivary.Data;
 using wsahRecieveDelivary.DTOs;
-using wsahRecieveDelivary.Models;
 using wsahRecieveDelivary.Helpers; // ✅ Add this namespace
+using wsahRecieveDelivary.Models;
 
 namespace wsahRecieveDelivary.Services
 {
@@ -641,6 +642,9 @@ namespace wsahRecieveDelivary.Services
                 _logger.LogInformation("🔄 Starting work order sync");
 
                 var externalWorkOrders = await FetchFromExternalApiAsync();
+
+                _logger.LogInformation("RAW API STATUS = {status}",
+    externalWorkOrders.FirstOrDefault()?.Status);
                 result.TotalRecordsFetched = externalWorkOrders.Count;
 
                 if (!externalWorkOrders.Any())
@@ -684,6 +688,7 @@ namespace wsahRecieveDelivary.Services
                         var totalWashRec = ParseInt(externalWo.TotalWashReceived.ToString());
                         var totalWashDel = ParseInt(externalWo.TotalWashDelivery.ToString());
                         var washBalance = ParseInt(externalWo.WashBalanceFromReceived.ToString());
+                        long? status = externalWo.Status;
 
                         if (washBalance == 0 && (totalWashRec > 0 || totalWashDel > 0))
                         {
@@ -692,11 +697,11 @@ namespace wsahRecieveDelivary.Services
 
                         if (existingWorkOrdersDict.TryGetValue(workOrderNo, out var existingWo))
                         {
-                            bool isChanged = HasDataChanged(existingWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance);
+                            bool isChanged = HasDataChanged(existingWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance, status);
 
                             if (isChanged)
                             {
-                                MapExternalToEntity(existingWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance);
+                                MapExternalToEntity(existingWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance,status);
                                 existingWo.UpdatedBy = 1;
                                 // ✅ Use Helper
                                 existingWo.UpdatedAt = DateTimeHelper.GetBangladeshTime();
@@ -722,12 +727,13 @@ namespace wsahRecieveDelivary.Services
                                     ?? "http://192.168.136.52:3000/api/washplans"
                             };
 
-                            MapExternalToEntity(newWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance);
+                            MapExternalToEntity(newWo, externalWo, orderQty, totalWashRec, totalWashDel, washBalance,status);
 
                             newWo.CutQty = 0;
                             newWo.SewingCompDate = null;
                             newWo.FirstRCVDate = null;
                             newWo.WashApprovalDate = null;
+                            
 
                             _context.WorkOrders.Add(newWo);
                             result.CreatedCount++;
@@ -807,7 +813,7 @@ namespace wsahRecieveDelivary.Services
         // Keep GetLastSyncStatusAsync and other helpers as they were...
 
         // (Include the rest of the file content like MapExternalToEntity, HasDataChanged, etc here...)
-        private bool HasDataChanged(WorkOrder db, ExternalWorkOrderDto api, int orderQty, int washRec, int washDel, int washBal)
+        private bool HasDataChanged(WorkOrder db, ExternalWorkOrderDto api, int orderQty, int washRec, int washDel, int washBal,long? status)
         {
             // (Same as before)
             if (!string.Equals(db.Factory, api.Factory?.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
@@ -829,10 +835,11 @@ namespace wsahRecieveDelivary.Services
             if (!string.Equals(db.FirstWashBatchTime, api.FirstWashBatchTime?.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
             if (!string.Equals(db.SecondWashBatchQty, api.SecondWashBatchQty?.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
             if (!string.Equals(db.SecondWashBatchTime, api.SecondWashBatchTime?.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            if (db.Status != status) return true;
             return false;
         }
 
-        private void MapExternalToEntity(WorkOrder wo, ExternalWorkOrderDto api, int orderQty, int washRec, int washDel, int washBal)
+        private void MapExternalToEntity(WorkOrder wo, ExternalWorkOrderDto api, int orderQty, int washRec, int washDel, int washBal, long? status)
         {
             // (Same as before)
             wo.WorkOrderNo = api.WorkOrderNo?.Trim();
@@ -857,11 +864,12 @@ namespace wsahRecieveDelivary.Services
             wo.FirstWashBatchTime = api.FirstWashBatchTime ?? "";
             wo.SecondWashBatchQty = api.SecondWashBatchQty ?? "";
             wo.SecondWashBatchTime = api.SecondWashBatchTime ?? "";
+            wo.Status = status;
         }
 
         private async Task<List<ExternalWorkOrderDto>> FetchFromExternalApiAsync()
         {
-            var apiUrl = _configuration["ExternalApi:WashPlansUrl"] ?? "http://192.168.136.52:3000/api/washplans";
+            var apiUrl = _configuration["ExternalApi:WashPlansUrl"] ?? "http://192.168.136.53:3000/api/washplans";
             // ✅ Read timeout from config or default to 300 seconds (5 minutes)
             var timeoutSeconds = _configuration.GetValue<int>("ExternalApi:TimeoutSeconds", 300);
             
@@ -870,7 +878,14 @@ namespace wsahRecieveDelivary.Services
             var response = await _httpClient.GetAsync(apiUrl);
             response.EnsureSuccessStatusCode();
             var jsonContent = await response.Content.ReadAsStringAsync();
+            var jsonObj = JsonConvert.DeserializeObject<dynamic>(jsonContent);
+
+            
+
             var apiResponse = JsonConvert.DeserializeObject<ApiWashPlansResponse>(jsonContent);
+            
+
+
             return apiResponse?.WashPlans ?? new List<ExternalWorkOrderDto>();
         }
 
