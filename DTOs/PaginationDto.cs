@@ -106,6 +106,7 @@ namespace wsahRecieveDelivary.DTOs
         public string? Unit { get; set; }
         public int? ProcessStageId { get; set; }
         public int? TransactionTypeId { get; set; }
+        public int? StatusId { get; set; }
 
         // ✅ NEW: Optional date range for summary reports
         public DateTime? StartDate { get; set; }

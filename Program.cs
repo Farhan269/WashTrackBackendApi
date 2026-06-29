@@ -91,6 +91,7 @@ try
     ///Dapper
     builder.Services.AddSingleton<WashDhuContext>();
     builder.Services.AddSingleton<WashDhuTWLContext>();
+    builder.Services.AddSingleton<TusukaExtremeContext>();
 
     // Register Services
     builder.Services.AddScoped<IJwtService, JwtService>();
@@ -103,6 +104,7 @@ try
     builder.Services.AddScoped<IWashPlan, WashPlanService>();
     builder.Services.AddScoped<IOutServiceApi, OutApiService>();
     builder.Services.AddScoped<IWashDhuRepository, WashDhuRepository>();
+    builder.Services.AddScoped<ITusukaExtremeRepository, TusukaExtremeRepository>();
 
     // ✅ External API Sync
     builder.Services.AddHttpClient<IExternalApiSyncService, ExternalApiSyncService>();

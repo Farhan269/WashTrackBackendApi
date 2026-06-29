@@ -29,6 +29,7 @@ namespace wsahRecieveDelivary.Controllers
         [ProducesResponseType(typeof(ReportResponseDto), 200)]
         [ProducesResponseType(400)]
         [ProducesResponseType(500)]
+       
         public async Task<IActionResult> GetTransactionReport([FromQuery] ReportRequestDto request)
         {
             try

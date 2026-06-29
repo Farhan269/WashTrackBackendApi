@@ -628,7 +628,48 @@ Agg AS
         IssueName
 )
 
-SELECT TOP 5
+--SELECT TOP 5
+  ----  ProcessModuleId,
+  --  ProcessModuleName,
+
+   --- WashProcessId,
+  ---  ProcessName,
+
+   --- WashProcessIssueId,
+   --- IssueName,
+
+  ---  IssueQty
+
+---FROM Agg
+
+----ORDER BY 
+    ----IssueQty DESC
+
+---OPTION (RECOMPILE);
+
+, Ranked AS
+(
+    SELECT
+        ProcessModuleId,
+        ProcessModuleName,
+
+        WashProcessId,
+        ProcessName,
+
+        WashProcessIssueId,
+        IssueName,
+
+        IssueQty,
+
+        ROW_NUMBER() OVER
+        (
+            PARTITION BY WashProcessId
+            ORDER BY IssueQty DESC
+        ) AS RowNo
+    FROM Agg
+)
+
+SELECT
     ProcessModuleId,
     ProcessModuleName,
 
@@ -640,9 +681,11 @@ SELECT TOP 5
 
     IssueQty
 
-FROM Agg
+FROM Ranked
+WHERE RowNo <= 3
 
-ORDER BY 
+ORDER BY
+    ProcessName,
     IssueQty DESC
 
 OPTION (RECOMPILE);

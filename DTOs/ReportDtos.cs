@@ -45,6 +45,7 @@ namespace wsahRecieveDelivary.DTOs
         public string SortOrder { get; set; } = "asc";
 
         public int? ShiftType { get; set; }
+        public bool? IsCompleted { get; set; }
     }
 
     // ==========================================
@@ -92,6 +93,8 @@ namespace wsahRecieveDelivary.DTOs
         // ✅ NEW: Shift-related fields
         public DateOnly ShiftDate { get; set; }
         public string ShiftType { get; set; } = string.Empty;  // "Day" or "Night"
+       // public bool? IsCompleted { get; set; }
+        public int? Status { get; set; }
 
     }
 

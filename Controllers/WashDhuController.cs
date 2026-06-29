@@ -37,6 +37,7 @@ namespace wsahRecieveDelivary.Controllers
         }
 
         [HttpGet("GetWetProcessSummary")]
+        [AllowAnonymous]
         public async Task<IActionResult> GetWetProcessSummary(
      [FromQuery] DryProcessSummaryFilterDto filter)
         {

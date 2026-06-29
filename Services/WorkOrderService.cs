@@ -826,6 +826,7 @@ namespace wsahRecieveDelivary.Services
             try
             {
                 var query = _context.WorkOrders
+                    .Where(w => w.Status != 5)
                     .AsNoTracking()
                     .Include(w => w.CreatedByUser)
                     .Include(w => w.UpdatedByUser)
@@ -873,7 +874,9 @@ namespace wsahRecieveDelivary.Services
                     };
                 }
 
-                var workOrderIds = workOrders.Select(w => w.Id).ToList();
+                var workOrderIds = workOrders
+                    .Select(w => w.Id)
+                    .ToList();
 
                 var allStageBalances = await _context.ProcessStageBalances
                     .AsNoTracking()

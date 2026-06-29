@@ -13,8 +13,11 @@ namespace wsahRecieveDelivary.Repository
         private readonly WashDhuContext _context;
         private readonly WashDhuTWLContext _twlContext;
 
-        private const int TplUnitId = 1;
-        private const int TwlUnitId = 2;
+        //private const int TplPlantId = 1;
+        //private const int TwlPlantId = 2;
+
+        private const int TplPlantId = 1;
+        private const int TwlPlantId = 2;
 
         public WashDhuRepository(WashDhuContext context, WashDhuTWLContext twlContext)
         {
@@ -67,12 +70,12 @@ namespace wsahRecieveDelivary.Repository
         public async Task<IEnumerable<DhuDryProcessSummaryDTO>> GetDryProcessSummaryAsync(
            DryProcessSummaryFilterDto filter)
         {
-            var selectedUnits = filter.UnitId ?? new List<int>();
+            var selectedPlants = filter.PlantId ?? new List<int>();
 
-            bool hasUnitFilter = selectedUnits.Any();
+            bool hasPlantFilter = selectedPlants.Any();
 
-            bool needTpl = !hasUnitFilter || selectedUnits.Contains(TplUnitId);
-            bool needTwl = !hasUnitFilter || selectedUnits.Contains(TwlUnitId);
+            bool needTpl = !hasPlantFilter || selectedPlants.Contains(TplPlantId);
+            bool needTwl = !hasPlantFilter || selectedPlants.Contains(TwlPlantId);
 
             var allData = new List<DhuDryProcessSummaryDTO>();
 
@@ -82,8 +85,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var tplFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TplUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TplPlantId).ToList()
                         : null
                 );
 
@@ -97,8 +100,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var twlFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TwlUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TwlPlantId).ToList()
                         : null
                 );
 
@@ -147,15 +150,17 @@ namespace wsahRecieveDelivary.Repository
         }
 
         private DryProcessSummaryFilterDto CloneFilter(
-            DryProcessSummaryFilterDto filter,
-            List<int>? unitIds)
+      DryProcessSummaryFilterDto filter,
+      List<int>? plantIds)
         {
             return new DryProcessSummaryFilterDto
             {
                 FromDate = filter.FromDate,
                 ToDate = filter.ToDate,
-                PlantId = filter.PlantId,
-                UnitId = unitIds,
+
+                PlantId = plantIds,
+                UnitId = filter.UnitId,
+
                 ProcessModuleId = filter.ProcessModuleId,
                 WashProcessId = filter.WashProcessId,
                 Shift = filter.Shift
@@ -259,11 +264,11 @@ namespace wsahRecieveDelivary.Repository
         public async Task<IEnumerable<TopIssueDTO>> GetTopIssuesAsync(
     DryProcessSummaryFilterDto filter)
         {
-            var selectedUnits = filter.UnitId ?? new List<int>();
-            bool hasUnitFilter = selectedUnits.Any();
+            var selectedPlants = filter.PlantId ?? new List<int>();
+            bool hasPlantFilter = selectedPlants.Any();
 
-            bool needTpl = !hasUnitFilter || selectedUnits.Contains(TplUnitId);
-            bool needTwl = !hasUnitFilter || selectedUnits.Contains(TwlUnitId);
+            bool needTpl = !hasPlantFilter || selectedPlants.Contains(TplPlantId);
+            bool needTwl = !hasPlantFilter || selectedPlants.Contains(TwlPlantId);
 
             var allData = new List<TopIssueDTO>();
 
@@ -273,8 +278,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var tplFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TplUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TplPlantId).ToList()
                         : null
                 );
 
@@ -288,8 +293,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var twlFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TwlUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TwlPlantId).ToList()
                         : null
                 );
 
@@ -335,17 +340,40 @@ namespace wsahRecieveDelivary.Repository
                 commandTimeout: 300
             );
         }
-        private IEnumerable<TopIssueDTO> AggregateTopIssues(
-    IEnumerable<TopIssueDTO> data)
+        //    private IEnumerable<TopIssueDTO> AggregateTopIssues(
+        //IEnumerable<TopIssueDTO> data)
+        //    {
+        //        return data
+        //            .GroupBy(x => new
+        //            {
+
+        //                x.WashProcessId,
+        //                x.ProcessName,
+        //                x.WashProcessIssueId,
+        //                x.IssueName,
+        //            })
+        //            .Select(g => new TopIssueDTO
+        //            {
+        //                WashProcessId = g.Key.WashProcessId,
+        //                ProcessName = g.Key.ProcessName,
+        //                WashProcessIssueId = g.Key.WashProcessIssueId,
+        //                IssueName = g.Key.IssueName,
+        //                IssueQty = g.Sum(x => x.IssueQty)
+
+        //            })
+        //            .OrderByDescending(x => x.IssueQty)
+        //            .Take(10)
+        //            .ToList();
+        //    }
+        private IEnumerable<TopIssueDTO> AggregateTopIssues(IEnumerable<TopIssueDTO> data)
         {
-            return data
+            var aggregated = data
                 .GroupBy(x => new
                 {
-                  
                     x.WashProcessId,
                     x.ProcessName,
                     x.WashProcessIssueId,
-                    x.IssueName,
+                    x.IssueName
                 })
                 .Select(g => new TopIssueDTO
                 {
@@ -354,13 +382,23 @@ namespace wsahRecieveDelivary.Repository
                     WashProcessIssueId = g.Key.WashProcessIssueId,
                     IssueName = g.Key.IssueName,
                     IssueQty = g.Sum(x => x.IssueQty)
-
                 })
-                .OrderByDescending(x => x.IssueQty)
-                .Take(10)
+                .ToList();
+
+            return aggregated
+                .GroupBy(x => new
+                {
+                    x.WashProcessId,
+                    x.ProcessName
+                })
+                .SelectMany(g => g
+                    .OrderByDescending(x => x.IssueQty)
+                    .Take(3)
+                )
+                .OrderBy(x => x.ProcessName)
+                .ThenByDescending(x => x.IssueQty)
                 .ToList();
         }
-
         //        public async Task<IEnumerable<DhuDryProcessSummaryDTO>> GetWetProcessSummaryAsync(
         //DryProcessSummaryFilterDto filter)
         //        {
@@ -403,11 +441,11 @@ namespace wsahRecieveDelivary.Repository
         public async Task<IEnumerable<DhuDryProcessSummaryDTO>> GetWetProcessSummaryAsync(
     DryProcessSummaryFilterDto filter)
         {
-            var selectedUnits = filter.UnitId ?? new List<int>();
-            bool hasUnitFilter = selectedUnits.Any();
+            var selectedPlants = filter.PlantId ?? new List<int>();
+            bool hasPlantFilter = selectedPlants.Any();
 
-            bool needTpl = !hasUnitFilter || selectedUnits.Contains(TplUnitId);
-            bool needTwl = !hasUnitFilter || selectedUnits.Contains(TwlUnitId);
+            bool needTpl = !hasPlantFilter || selectedPlants.Contains(TplPlantId);
+            bool needTwl = !hasPlantFilter || selectedPlants.Contains(TwlPlantId);
 
             var allData = new List<DhuDryProcessSummaryDTO>();
 
@@ -417,8 +455,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var tplFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TplUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TplPlantId).ToList()
                         : null
                 );
 
@@ -432,8 +470,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var twlFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TwlUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TwlPlantId).ToList()
                         : null
                 );
 
@@ -520,11 +558,11 @@ namespace wsahRecieveDelivary.Repository
         public async Task<IEnumerable<TopIssueDTO>> GetWetTopIssuesAsync(
     DryProcessSummaryFilterDto filter)
         {
-            var selectedUnits = filter.UnitId ?? new List<int>();
-            bool hasUnitFilter = selectedUnits.Any();
+            var selectedPlants = filter.PlantId ?? new List<int>();
+            bool hasPlantFilter = selectedPlants.Any();
 
-            bool needTpl = !hasUnitFilter || selectedUnits.Contains(TplUnitId);
-            bool needTwl = !hasUnitFilter || selectedUnits.Contains(TwlUnitId);
+            bool needTpl = !hasPlantFilter || selectedPlants.Contains(TplPlantId);
+            bool needTwl = !hasPlantFilter || selectedPlants.Contains(TwlPlantId);
 
             var allData = new List<TopIssueDTO>();
 
@@ -534,8 +572,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var tplFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TplUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TplPlantId).ToList()
                         : null
                 );
 
@@ -549,8 +587,8 @@ namespace wsahRecieveDelivary.Repository
 
                 var twlFilter = CloneFilter(
                     filter,
-                    hasUnitFilter
-                        ? selectedUnits.Where(x => x == TwlUnitId).ToList()
+                    hasPlantFilter
+                        ? selectedPlants.Where(x => x == TwlPlantId).ToList()
                         : null
                 );
 

@@ -35,6 +35,7 @@ namespace wsahRecieveDelivary.Services
             public DateTime? WashTargetDate { get; set; }
             public int TotalWashReceived { get; set; }
             public int TotalWashDelivery { get; set; }
+            public int? Status { get; set; }
         }
 
         // ==========================================
@@ -72,10 +73,21 @@ namespace wsahRecieveDelivary.Services
                 Console.WriteLine($"   ShiftType: {request.ShiftType}");
 
                 var workOrderQuery = _context.WorkOrders
+                    .Where(x=> x.TotalWashReceived > 0)
                     .AsNoTracking()
                     .AsQueryable();
 
                 workOrderQuery = ApplyWorkOrderFilters(workOrderQuery, request);
+                if (request.IsCompleted == true)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status == 5);
+                }
+                else if (request.IsCompleted == false)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status != 5 || w.Status == null);
+                }
+
+
 
                 if (request.StartDate.HasValue || request.EndDate.HasValue ||
                     request.ProcessStageId.HasValue || request.TransactionTypeId.HasValue ||
@@ -106,6 +118,8 @@ namespace wsahRecieveDelivary.Services
                         transactionQuery = transactionQuery.Where(t => t.ShiftType == shiftType);
                         Console.WriteLine($"   Filtering by ShiftType: {shiftType}");
                     }
+
+                   
 
                     var matchingWorkOrderIds = await transactionQuery
                         .Select(t => t.WorkOrderId)
@@ -157,7 +171,8 @@ namespace wsahRecieveDelivary.Services
                         OrderQuantity = w.OrderQuantity ?? 0,
                         WashTargetDate = w.WashTargetDate,
                         TotalWashReceived = w.TotalWashReceived ?? 0,
-                        TotalWashDelivery = w.TotalWashDelivery ?? 0
+                        TotalWashDelivery = w.TotalWashDelivery ?? 0,
+                        Status = (int?)w.Status
                     })
                     .ToListAsync();
 
@@ -232,6 +247,16 @@ namespace wsahRecieveDelivary.Services
                 // Build query
                 var workOrderQuery = _context.WorkOrders.AsNoTracking().AsQueryable();
                 workOrderQuery = ApplyWorkOrderFilters(workOrderQuery, request);
+                if (request.IsCompleted == true)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status == 5);
+                }
+                else if (request.IsCompleted == false)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status != 5 || w.Status == null);
+                }
+
+
 
                 // Apply transaction filters if needed
                 if (request.StartDate.HasValue || request.EndDate.HasValue ||
@@ -295,7 +320,8 @@ namespace wsahRecieveDelivary.Services
                         OrderQuantity = w.OrderQuantity ?? 0,
                         WashTargetDate = w.WashTargetDate,
                         TotalWashReceived = w.TotalWashReceived ?? 0,
-                        TotalWashDelivery = w.TotalWashDelivery ?? 0
+                        TotalWashDelivery = w.TotalWashDelivery ?? 0,
+                        Status = (int?)w.Status
                     })
                     .ToListAsync();
 
@@ -369,7 +395,7 @@ namespace wsahRecieveDelivary.Services
                 var headers = new List<string>
                 {
                     "Factory", "Unit", "Work Order No", "FastReact No", "Buyer", "Style Name",
-                    "Order Qty", "Wash Target Date", "Marks", "Total Wash Received", "Total Wash Delivery"
+                    "Order Qty", "Wash Target Date", "Marks", "Total Wash Received", "Total Wash Delivery", "Status"
                 };
 
                 // Add stage headers
@@ -397,7 +423,8 @@ namespace wsahRecieveDelivary.Services
                         row.WashTargetDate.HasValue ? row.WashTargetDate.Value.ToString("yyyy-MM-dd") : "",
                         $"\"{EscapeCsvField(row.Marks ?? "")}\"",
                         row.TotalWashReceived.ToString(),
-                        row.TotalWashDelivery.ToString()
+                        row.TotalWashDelivery.ToString(),
+                        row.Status == 5 ? "Completed" : "Not Completed"
                     };
 
                     // Add stage values
@@ -919,7 +946,8 @@ namespace wsahRecieveDelivary.Services
                     ShiftDate = firstShiftDate != DateOnly.MinValue
                 ? firstShiftDate
                 : DateOnly.FromDateTime(DateTime.Now),
-                    ShiftType = shiftTypeDisplay
+                    ShiftType = shiftTypeDisplay,
+                    Status = wo.Status,
                 });
             }
 
@@ -933,8 +961,19 @@ namespace wsahRecieveDelivary.Services
             try
             {
                 // Get matching work order IDs first
-                var workOrderQuery = _context.WorkOrders.AsNoTracking().AsQueryable();
+                var workOrderQuery = _context.WorkOrders
+                                        .Where(x => x.TotalWashReceived > 0)
+                                        .AsNoTracking()
+                                        .AsQueryable();
                 workOrderQuery = ApplyWorkOrderFilters(workOrderQuery, request);
+                if (request.IsCompleted == true)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status == 5);
+                }
+                else if (request.IsCompleted == false)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status != 5 || w.Status == null);
+                }
 
                 // Get total order quantity and count
                 var workOrderStats = await workOrderQuery
