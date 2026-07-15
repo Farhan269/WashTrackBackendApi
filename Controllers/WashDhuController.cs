@@ -53,5 +53,48 @@ namespace wsahRecieveDelivary.Controllers
             var result = await _service.GetWetTopIssuesAsync(filter);
             return Ok(result);
         }
+
+
+        [HttpGet("GetDryProcessDetails")]
+        public async Task<IActionResult> GetDryProcessDetails(
+     [FromQuery] DryProcessDetailsFilterDto filter)
+        {
+            var result = await _service
+                .GetDryProcessDetailsAsync(filter);
+
+            return Ok(result);
+        }
+
+
+        [HttpGet("GetWetProcessDetails")]
+        public async Task<IActionResult> GetWetProcessDetails(
+     [FromQuery] DryProcessDetailsFilterDto filter)
+        {
+            var result = await _service
+                .GetWetProcessDetailsAsync(filter);
+
+            return Ok(result);
+        }
+
+        [HttpGet("GetDryProcessHourlyDetails")]
+        public async Task<IActionResult> GetDryProcessHourlyDetailsAsync(
+    [FromQuery] DhuDryProcessHourlyDetailsFilterDto filter)
+        {
+            var result = await _service
+                .GetDryProcessHourlyDetailsAsync(filter);
+
+            return Ok(result);
+        }
+
+        [HttpGet("GetWetProcessHourlyDetails")]
+        public async Task<IActionResult> GetWetProcessHourlyDetailsAsync(
+    [FromQuery] DhuDryProcessHourlyDetailsFilterDto filter)
+        {
+            var result = await _service
+                .GetWetProcessHourlyDetailsAsync(filter);
+
+            return Ok(result);
+        }
+
     }
 }

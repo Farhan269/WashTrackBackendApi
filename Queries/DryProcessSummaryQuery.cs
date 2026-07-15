@@ -440,6 +440,11 @@ ORDER BY
 ";
 
 
+
+       
+
+
+
         public const string GetTopIssues = @"
 WITH PlantFilter AS
 (
@@ -692,6 +697,573 @@ OPTION (RECOMPILE);
 ";
 
 
+
+        public const string GetDetails = @"
+;WITH PlantFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@PlantIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+UnitFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@UnitIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ProcessModuleFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ProcessModuleIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+WashProcessFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@WashProcessIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ShiftFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ShiftList, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+BaseQc AS
+(
+    SELECT
+        fdpq.Id,
+        fdpq.WorkOrderId,
+
+        wo.StyleName,
+        wo.FastReactNo,
+        wo.WorkOrderNo,
+
+        fdpq.FirstDryProcessId,
+        fdpq.WashProcessId,
+        fdpq.QcStatusId,
+        fdpq.CreateDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+                THEN CAST(fdpq.CreateDate AS DATE)
+            ELSE
+                CAST(DATEADD(DAY, -1, fdpq.CreateDate) AS DATE)
+        END AS OperationalDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
+                THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM FirstDryProcessQc fdpq
+
+    LEFT JOIN WorkOrder wo
+        ON wo.Id = fdpq.WorkOrderId
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        AND
+        (
+            @FromDate IS NULL
+            OR fdpq.CreateDate >= DATEADD(
+                HOUR,
+                8,
+                CAST(@FromDate AS DATETIME)
+            )
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR fdpq.CreateDate < DATEADD(
+                HOUR,
+                8,
+                DATEADD(
+                    DAY,
+                    1,
+                    CAST(@ToDate AS DATETIME)
+                )
+            )
+        )
+        AND
+        (
+            @SearchText IS NULL
+            OR wo.StyleName LIKE '%' + @SearchText + '%'
+            OR wo.FastReactNo LIKE '%' + @SearchText + '%'
+            OR wo.WorkOrderNo LIKE '%' + @SearchText + '%'
+        )
+),
+
+QcData AS
+(
+    SELECT
+        b.WorkOrderId,
+        b.StyleName,
+        b.FastReactNo,
+        b.WorkOrderNo,
+
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name AS ProcessModuleName,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId IN (1, 3) THEN 1
+                ELSE 0
+            END
+        ) AS PassQty,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId = 2 THEN 1
+                ELSE 0
+            END
+        ) AS DefectQty,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId = 4 THEN 1
+                ELSE 0
+            END
+        ) AS RejectQty
+
+    FROM BaseQc b
+
+    INNER JOIN FirstDryProcess fdp
+        ON fdp.Id = b.FirstDryProcessId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = b.WashProcessId
+
+    INNER JOIN ProcessModule pm
+        ON pm.Id = fdp.ProcessModuleId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+        b.WorkOrderId,
+        b.StyleName,
+        b.FastReactNo,
+        b.WorkOrderNo,
+
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift
+),
+
+IssueData AS
+(
+    SELECT
+        b.WorkOrderId,
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+
+        COUNT_BIG(*) AS IssueQty
+
+    FROM FirstDryProcessQcIsuee qi
+
+    INNER JOIN BaseQc b
+        ON b.Id = qi.FirstDryProcessQcId
+
+    INNER JOIN FirstDryProcess fdp
+        ON fdp.Id = b.FirstDryProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+        b.WorkOrderId,
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift
+),
+
+TargetData AS
+(
+    SELECT
+        wh.WorkingHourDay AS OperationalDate,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        CASE
+            WHEN whd.StartTime >= '08:00:00'
+             AND whd.StartTime < '20:00:00'
+                THEN 1
+            ELSE 2
+        END AS Shift,
+
+        SUM(whdp.DailyTarget) AS DayTarget,
+
+        ROUND(
+            AVG(CAST(whdp.ManPower AS DECIMAL(18, 2))),
+            0
+        ) AS ManPower,
+
+        AVG(
+            CAST(whdp.SMV AS DECIMAL(18, 2))
+        ) AS SMV
+
+    FROM WorkingHourDetailManPower whdp
+
+    INNER JOIN WorkingHourDetail whd
+        ON whd.Id = whdp.WorkingHourDetailId
+
+    INNER JOIN WorkingHour wh
+        ON wh.Id = whd.WorkingHourId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = whdp.WashProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = wh.UnitId
+
+    WHERE
+        whdp.IsActive = 1
+        AND whdp.IsDeleted = 0
+
+        AND
+        (
+            @FromDate IS NULL
+            OR wh.WorkingHourDay >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR wh.WorkingHourDay <= @ToDate
+        )
+
+        AND
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = wh.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = wp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = whdp.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id =
+                    CASE
+                        WHEN whd.StartTime >= '08:00:00'
+                         AND whd.StartTime < '20:00:00'
+                            THEN 1
+                        ELSE 2
+                    END
+            )
+        )
+
+    GROUP BY
+        wh.WorkingHourDay,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        CASE
+            WHEN whd.StartTime >= '08:00:00'
+             AND whd.StartTime < '20:00:00'
+                THEN 1
+            ELSE 2
+        END
+)
+
+SELECT
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+
+    q.WashProcessId,
+    q.ProcessName,
+
+    SUM(q.PassQty) AS PassQty,
+    SUM(q.DefectQty) AS DefectQty,
+    SUM(q.RejectQty) AS RejectQty,
+
+    SUM(ISNULL(i.IssueQty, 0)) AS IssueQty,
+
+    SUM(ISNULL(t.DayTarget, 0)) AS DayTarget,
+
+    ROUND(
+        AVG(ISNULL(t.ManPower, 0)),
+        0
+    ) AS ManPower,
+
+    AVG(ISNULL(t.SMV, 0)) AS SMV,
+
+    CASE
+        WHEN SUM(q.PassQty) = 0 THEN 0
+        ELSE CAST(
+            SUM(ISNULL(i.IssueQty, 0))
+            * 100.0
+            / NULLIF(SUM(q.PassQty), 0)
+            AS DECIMAL(18, 2)
+        )
+    END AS DHU,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+            THEN 0
+        ELSE CAST(
+            SUM(ISNULL(t.DayTarget, 0))
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                11
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS PlanEff,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+            THEN 0
+        ELSE CAST(
+            SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                11
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS ActualEff
+
+FROM QcData q
+
+LEFT JOIN IssueData i
+    ON i.WorkOrderId = q.WorkOrderId
+   AND i.UnitId = q.UnitId
+   AND i.ProcessModuleId = q.ProcessModuleId
+   AND i.WashProcessId = q.WashProcessId
+   AND i.OperationalDate = q.OperationalDate
+   AND i.Shift = q.Shift
+
+LEFT JOIN TargetData t
+    ON t.UnitId = q.UnitId
+   AND t.ProcessModuleId = q.ProcessModuleId
+   AND t.WashProcessId = q.WashProcessId
+   AND t.OperationalDate = q.OperationalDate
+   AND t.Shift = q.Shift
+
+GROUP BY
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+
+    q.WashProcessId,
+    q.ProcessName
+
+ORDER BY
+    q.ProcessModuleName,
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+    q.ProcessName
+
+OPTION (RECOMPILE);
+ 
+";
 
         public const string GetWetSummary = @"
 WITH PlantFilter AS
@@ -1128,6 +1700,557 @@ OPTION (RECOMPILE);
 ";
 
 
+        public const string GetWetDetails = @"
+;WITH PlantFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@PlantIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+UnitFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@UnitIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ProcessModuleFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ProcessModuleIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+WashProcessFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@WashProcessIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ShiftFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ShiftList, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+BaseQc AS
+(
+    SELECT
+        fdpq.Id,
+        fdpq.WorkOrderId,
+		  fdpq.Quantity,
+        wo.StyleName,
+        wo.FastReactNo,
+        wo.WorkOrderNo,
+
+        fdpq.WashBatchCardId,
+        fdpq.WashProcessId,
+        fdpq.QcStatusId,
+        fdpq.CreateDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+                THEN CAST(fdpq.CreateDate AS DATE)
+            ELSE
+                CAST(DATEADD(DAY, -1, fdpq.CreateDate) AS DATE)
+        END AS OperationalDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+             AND CAST(fdpq.CreateDate AS TIME) < '20:00:00'
+                THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM WashBatchCardQc fdpq
+
+    LEFT JOIN WorkOrder wo
+        ON wo.Id = fdpq.WorkOrderId
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        AND
+        (
+            @FromDate IS NULL
+            OR fdpq.CreateDate >= DATEADD(
+                HOUR,
+                8,
+                CAST(@FromDate AS DATETIME)
+            )
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR fdpq.CreateDate < DATEADD(
+                HOUR,
+                8,
+                DATEADD(
+                    DAY,
+                    1,
+                    CAST(@ToDate AS DATETIME)
+                )
+            )
+        )
+        AND
+        (
+            @SearchText IS NULL
+            OR wo.StyleName LIKE '%' + @SearchText + '%'
+            OR wo.FastReactNo LIKE '%' + @SearchText + '%'
+            OR wo.WorkOrderNo LIKE '%' + @SearchText + '%'
+        )
+),
+
+QcData AS
+(
+    SELECT
+        b.WorkOrderId,
+        b.StyleName,
+        b.FastReactNo,
+        b.WorkOrderNo,
+		
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name AS ProcessModuleName,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+
+        SUM(CASE WHEN b.QcStatusId IN (1,3) THEN b.Quantity ELSE 0 END) AS PassQty,
+        SUM(CASE WHEN b.QcStatusId = 2 THEN b.Quantity ELSE 0 END) AS DefectQty,
+        SUM(CASE WHEN b.QcStatusId = 4 THEN b.Quantity ELSE 0 END) AS RejectQty
+
+    FROM BaseQc b
+
+    INNER JOIN WashBatchCard fdp
+        ON fdp.Id = b.WashBatchCardId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = b.WashProcessId
+
+    INNER JOIN ProcessModule pm
+        ON pm.Id = fdp.ProcessModuleId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+        b.WorkOrderId,
+        b.StyleName,
+        b.FastReactNo,
+        b.WorkOrderNo,
+
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift
+),
+
+IssueData AS
+(
+    SELECT
+        b.WorkOrderId,
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+
+        COUNT_BIG(*) AS IssueQty
+
+    FROM WashBatchCardQcIsue qi
+
+    INNER JOIN BaseQc b
+        ON b.Id = qi.WashBatchCardQcId
+
+    INNER JOIN WashBatchCard fdp
+        ON fdp.Id = b.WashBatchCardId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+        b.WorkOrderId,
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift
+),
+
+TargetData AS
+(
+    SELECT
+        wh.WorkingHourDay AS OperationalDate,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        CASE
+            WHEN whd.StartTime >= '08:00:00'
+             AND whd.StartTime < '20:00:00'
+                THEN 1
+            ELSE 2
+        END AS Shift,
+
+        SUM(whdp.DailyTarget) AS DayTarget,
+
+        ROUND(
+            AVG(CAST(whdp.ManPower AS DECIMAL(18, 2))),
+            0
+        ) AS ManPower,
+
+        AVG(
+            CAST(whdp.SMV AS DECIMAL(18, 2))
+        ) AS SMV
+
+    FROM WorkingHourDetailManPower whdp
+
+    INNER JOIN WorkingHourDetail whd
+        ON whd.Id = whdp.WorkingHourDetailId
+
+    INNER JOIN WorkingHour wh
+        ON wh.Id = whd.WorkingHourId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = whdp.WashProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = wh.UnitId
+
+    WHERE
+        whdp.IsActive = 1
+        AND whdp.IsDeleted = 0
+
+        AND
+        (
+            @FromDate IS NULL
+            OR wh.WorkingHourDay >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR wh.WorkingHourDay <= @ToDate
+        )
+
+        AND
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = wh.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = wp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = whdp.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id =
+                    CASE
+                        WHEN whd.StartTime >= '08:00:00'
+                         AND whd.StartTime < '20:00:00'
+                            THEN 1
+                        ELSE 2
+                    END
+            )
+        )
+
+    GROUP BY
+        wh.WorkingHourDay,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        CASE
+            WHEN whd.StartTime >= '08:00:00'
+             AND whd.StartTime < '20:00:00'
+                THEN 1
+            ELSE 2
+        END
+)
+
+SELECT
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+
+    q.WashProcessId,
+    q.ProcessName,
+
+    SUM(q.PassQty) AS PassQty,
+    SUM(q.DefectQty) AS DefectQty,
+    SUM(q.RejectQty) AS RejectQty,
+
+    SUM(ISNULL(i.IssueQty, 0)) AS IssueQty,
+
+    SUM(ISNULL(t.DayTarget, 0)) AS DayTarget,
+
+    ROUND(
+        AVG(ISNULL(t.ManPower, 0)),
+        0
+    ) AS ManPower,
+
+    AVG(ISNULL(t.SMV, 0)) AS SMV,
+
+    CASE
+        WHEN SUM(q.PassQty) = 0 THEN 0
+        ELSE CAST(
+            SUM(ISNULL(i.IssueQty, 0))
+            * 100.0
+            / NULLIF(SUM(q.PassQty), 0)
+            AS DECIMAL(18, 2)
+        )
+    END AS DHU,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+            THEN 0
+        ELSE CAST(
+            SUM(ISNULL(t.DayTarget, 0))
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                11
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS PlanEff,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+            THEN 0
+        ELSE CAST(
+            SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                11
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS ActualEff
+
+FROM QcData q
+
+LEFT JOIN IssueData i
+    ON i.WorkOrderId = q.WorkOrderId
+   AND i.UnitId = q.UnitId
+   AND i.ProcessModuleId = q.ProcessModuleId
+   AND i.WashProcessId = q.WashProcessId
+   AND i.OperationalDate = q.OperationalDate
+   AND i.Shift = q.Shift
+
+LEFT JOIN TargetData t
+    ON t.UnitId = q.UnitId
+   AND t.ProcessModuleId = q.ProcessModuleId
+   AND t.WashProcessId = q.WashProcessId
+   AND t.OperationalDate = q.OperationalDate
+   AND t.Shift = q.Shift
+
+GROUP BY
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+
+    q.WashProcessId,
+    q.ProcessName
+
+ORDER BY
+    q.ProcessModuleName,
+    q.StyleName,
+    q.FastReactNo,
+    q.WorkOrderNo,
+    q.ProcessName
+
+OPTION (RECOMPILE);
+ 
+";
+
+
         public const string GetWetTopIssues = @"
 WITH PlantFilter AS
 (
@@ -1330,6 +2453,1178 @@ FROM Agg
 
 ORDER BY 
     IssueQty DESC
+
+OPTION (RECOMPILE);
+";
+
+        public const string GetDryProcessHourlyDetails = @"
+;WITH PlantFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@PlantIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+UnitFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@UnitIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ProcessModuleFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ProcessModuleIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+WashProcessFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@WashProcessIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ShiftFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ShiftList, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+BaseQc AS
+(
+    SELECT
+        fdpq.Id,
+        fdpq.FirstDryProcessId,
+        fdpq.WashProcessId,
+        fdpq.QcStatusId,
+        fdpq.CreateDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+                THEN CAST(fdpq.CreateDate AS DATE)
+            ELSE
+                CAST(DATEADD(DAY, -1, fdpq.CreateDate) AS DATE)
+        END AS OperationalDate,
+
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM FirstDryProcessQc fdpq
+
+    LEFT JOIN WorkOrder wo
+        ON wo.Id = fdpq.WorkOrderId
+
+    CROSS APPLY
+    (
+        SELECT
+            (
+                (
+                    DATEPART(HOUR, fdpq.CreateDate)
+                    - 8
+                    + 24
+                ) % 24
+            ) + 1 AS HourSlot
+    ) hs
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        -- Operational date starts at 08:00 AM
+        AND
+        (
+            @FromDate IS NULL
+            OR fdpq.CreateDate >= DATEADD(
+                HOUR,
+                8,
+                CAST(@FromDate AS DATETIME)
+            )
+        )
+
+        -- Includes up to next day before 08:00 AM
+        AND
+        (
+            @ToDate IS NULL
+            OR fdpq.CreateDate < DATEADD(
+                HOUR,
+                8,
+                DATEADD(
+                    DAY,
+                    1,
+                    CAST(@ToDate AS DATETIME)
+                )
+            )
+        )
+
+        
+),
+
+QcData AS
+(
+    SELECT
+     
+     
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name AS ProcessModuleName,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId IN (1, 3) THEN 1
+                ELSE 0
+            END
+        ) AS PassQty,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId = 2 THEN 1
+                ELSE 0
+            END
+        ) AS DefectQty,
+
+        SUM(
+            CASE
+                WHEN b.QcStatusId = 4 THEN 1
+                ELSE 0
+            END
+        ) AS RejectQty
+
+    FROM BaseQc b
+
+    INNER JOIN FirstDryProcess fdp
+        ON fdp.Id = b.FirstDryProcessId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = b.WashProcessId
+
+    INNER JOIN ProcessModule pm
+        ON pm.Id = fdp.ProcessModuleId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+   
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot
+),
+
+IssueData AS
+(
+    SELECT
+
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot,
+
+        COUNT_BIG(*) AS IssueQty
+
+    FROM FirstDryProcessQcIsuee qi
+
+    INNER JOIN BaseQc b
+        ON b.Id = qi.FirstDryProcessQcId
+
+    INNER JOIN FirstDryProcess fdp
+        ON fdp.Id = b.FirstDryProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+  
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot
+),
+
+TargetData AS
+(
+    SELECT
+        wh.WorkingHourDay AS OperationalDate,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END AS Shift,
+
+        SUM(whdp.DailyTarget) AS DayTarget,
+
+        ROUND(
+            AVG(CAST(whdp.ManPower AS DECIMAL(18, 2))),
+            0
+        ) AS ManPower,
+
+        AVG(
+            CAST(whdp.SMV AS DECIMAL(18, 2))
+        ) AS SMV
+
+    FROM WorkingHourDetailManPower whdp
+
+    INNER JOIN WorkingHourDetail whd
+        ON whd.Id = whdp.WorkingHourDetailId
+
+    INNER JOIN WorkingHour wh
+        ON wh.Id = whd.WorkingHourId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = whdp.WashProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = wh.UnitId
+
+    CROSS APPLY
+    (
+        SELECT
+            (
+                (
+                    DATEPART(HOUR, whd.StartTime)
+                    - 8
+                    + 24
+                ) % 24
+            ) + 1 AS HourSlot
+    ) hs
+
+    WHERE
+        whdp.IsActive = 1
+        AND whdp.IsDeleted = 0
+
+        AND
+        (
+            @FromDate IS NULL
+            OR wh.WorkingHourDay >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR wh.WorkingHourDay <= @ToDate
+        )
+
+        AND
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = wh.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = wp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = whdp.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id =
+                    CASE
+                        WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+                        ELSE 2
+                    END
+            )
+        )
+
+    GROUP BY
+        wh.WorkingHourDay,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END
+)
+
+SELECT
+    q.OperationalDate,
+
+    
+
+    q.HourSlot,
+
+    CONCAT(
+        RIGHT(
+            '0' + CAST(((q.HourSlot + 7) % 24) AS VARCHAR(2)),
+            2
+        ),
+        ':00 - ',
+        RIGHT(
+            '0' + CAST(((q.HourSlot + 8) % 24) AS VARCHAR(2)),
+            2
+        ),
+        ':00'
+    ) AS HourRange,
+
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+
+    q.WashProcessId,
+    q.ProcessName,
+
+    SUM(q.PassQty) AS PassQty,
+    SUM(q.DefectQty) AS DefectQty,
+    SUM(q.RejectQty) AS RejectQty,
+
+    SUM(ISNULL(i.IssueQty, 0)) AS IssueQty,
+
+    SUM(ISNULL(t.DayTarget, 0)) AS DayTarget,
+
+    ROUND(
+        AVG(ISNULL(t.ManPower, 0)),
+        0
+    ) AS ManPower,
+
+    AVG(ISNULL(t.SMV, 0)) AS SMV,
+
+    CASE
+        WHEN SUM(q.PassQty) = 0 THEN 0
+        ELSE CAST(
+            SUM(ISNULL(i.IssueQty, 0))
+            * 100.0
+            / NULLIF(SUM(q.PassQty), 0)
+            AS DECIMAL(18, 2)
+        )
+    END AS DHU,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+        THEN 0
+        ELSE CAST(
+            SUM(ISNULL(t.DayTarget, 0))
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                1
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS PlanEff,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+        THEN 0
+        ELSE CAST(
+            SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                1
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS ActualEff
+
+FROM QcData q
+
+LEFT JOIN IssueData i
+   on i.UnitId = q.UnitId
+   AND i.ProcessModuleId = q.ProcessModuleId
+   AND i.WashProcessId = q.WashProcessId
+   AND i.OperationalDate = q.OperationalDate
+   AND i.Shift = q.Shift
+   AND i.HourSlot = q.HourSlot
+
+LEFT JOIN TargetData t
+    ON t.UnitId = q.UnitId
+   AND t.ProcessModuleId = q.ProcessModuleId
+   AND t.WashProcessId = q.WashProcessId
+   AND t.OperationalDate = q.OperationalDate
+   AND t.Shift = q.Shift
+   AND t.HourSlot = q.HourSlot
+
+GROUP BY
+    q.OperationalDate,
+    q.HourSlot,
+
+    
+
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+
+    q.WashProcessId,
+    q.ProcessName
+
+ORDER BY
+    q.OperationalDate,
+    q.HourSlot,
+    q.ProcessModuleName,
+    q.ProcessName
+
+OPTION (RECOMPILE);
+";
+
+        public const string GetWetProcessHourlyDetails = @"
+;WITH PlantFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@PlantIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+UnitFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@UnitIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ProcessModuleFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ProcessModuleIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+WashProcessFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@WashProcessIds, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+ShiftFilter AS
+(
+    SELECT TRY_CAST(LTRIM(RTRIM(value)) AS INT) AS Id
+    FROM STRING_SPLIT(@ShiftList, ',')
+    WHERE TRY_CAST(LTRIM(RTRIM(value)) AS INT) IS NOT NULL
+),
+
+BaseQc AS
+(
+    SELECT
+        fdpq.Id,
+        fdpq.WashBatchCardId,
+        fdpq.WashProcessId,
+		fdpq.Quantity,
+        fdpq.QcStatusId,
+        fdpq.CreateDate,
+
+        CASE
+            WHEN CAST(fdpq.CreateDate AS TIME) >= '08:00:00'
+                THEN CAST(fdpq.CreateDate AS DATE)
+            ELSE
+                CAST(DATEADD(DAY, -1, fdpq.CreateDate) AS DATE)
+        END AS OperationalDate,
+
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END AS Shift
+
+    FROM WashBatchCardQc fdpq
+
+    LEFT JOIN WorkOrder wo
+        ON wo.Id = fdpq.WorkOrderId
+
+    CROSS APPLY
+    (
+        SELECT
+            (
+                (
+                    DATEPART(HOUR, fdpq.CreateDate)
+                    - 8
+                    + 24
+                ) % 24
+            ) + 1 AS HourSlot
+    ) hs
+
+    WHERE
+        fdpq.IsDeleted = 0
+        AND fdpq.IsActive = 1
+
+        -- Operational date starts at 08:00 AM
+        AND
+        (
+            @FromDate IS NULL
+            OR fdpq.CreateDate >= DATEADD(
+                HOUR,
+                8,
+                CAST(@FromDate AS DATETIME)
+            )
+        )
+
+        -- Includes up to next day before 08:00 AM
+        AND
+        (
+            @ToDate IS NULL
+            OR fdpq.CreateDate < DATEADD(
+                HOUR,
+                8,
+                DATEADD(
+                    DAY,
+                    1,
+                    CAST(@ToDate AS DATETIME)
+                )
+            )
+        )
+
+        
+),
+
+QcData AS
+(
+    SELECT
+     
+     
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name AS ProcessModuleName,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot,
+		SUM(CASE WHEN b.QcStatusId IN (1,3) THEN b.Quantity ELSE 0 END) AS PassQty,
+		 SUM(CASE WHEN b.QcStatusId = 2 THEN b.Quantity ELSE 0 END) AS DefectQty,
+        SUM(CASE WHEN b.QcStatusId = 4 THEN b.Quantity ELSE 0 END) AS RejectQty
+        
+    FROM BaseQc b
+
+    INNER JOIN WashBatchCard fdp
+        ON fdp.Id = b.WashBatchCardId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = b.WashProcessId
+
+    INNER JOIN ProcessModule pm
+        ON pm.Id = fdp.ProcessModuleId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+   
+        b.WashProcessId,
+        wp.ProcessName,
+
+        fdp.ProcessModuleId,
+        pm.Name,
+
+        pu.PlantId,
+        fdp.UnitId,
+
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot
+),
+
+IssueData AS
+(
+    SELECT
+
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot,
+
+        COUNT_BIG(*) AS IssueQty
+
+    FROM WashBatchCardQcIsue qi
+
+    INNER JOIN BaseQc b
+        ON b.Id = qi.WashBatchCardQcId
+
+    INNER JOIN WashBatchCard fdp
+        ON fdp.Id = b.WashBatchCardId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = fdp.UnitId
+
+    WHERE
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = fdp.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = fdp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = b.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id = b.Shift
+            )
+        )
+
+    GROUP BY
+  
+
+        fdp.UnitId,
+        fdp.ProcessModuleId,
+
+        b.WashProcessId,
+        b.OperationalDate,
+        b.Shift,
+        b.HourSlot
+),
+
+TargetData AS
+(
+    SELECT
+        wh.WorkingHourDay AS OperationalDate,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END AS Shift,
+
+        SUM(whdp.DailyTarget) AS DayTarget,
+
+        ROUND(
+            AVG(CAST(whdp.ManPower AS DECIMAL(18, 2))),
+            0
+        ) AS ManPower,
+
+        AVG(
+            CAST(whdp.SMV AS DECIMAL(18, 2))
+        ) AS SMV
+
+    FROM WorkingHourDetailManPower whdp
+
+    INNER JOIN WorkingHourDetail whd
+        ON whd.Id = whdp.WorkingHourDetailId
+
+    INNER JOIN WorkingHour wh
+        ON wh.Id = whd.WorkingHourId
+
+    INNER JOIN WashProcess wp
+        ON wp.Id = whdp.WashProcessId
+
+    INNER JOIN PlantUnit pu
+        ON pu.Id = wh.UnitId
+
+    CROSS APPLY
+    (
+        SELECT
+            (
+                (
+                    DATEPART(HOUR, whd.StartTime)
+                    - 8
+                    + 24
+                ) % 24
+            ) + 1 AS HourSlot
+    ) hs
+
+    WHERE
+        whdp.IsActive = 1
+        AND whdp.IsDeleted = 0
+
+        AND
+        (
+            @FromDate IS NULL
+            OR wh.WorkingHourDay >= @FromDate
+        )
+
+        AND
+        (
+            @ToDate IS NULL
+            OR wh.WorkingHourDay <= @ToDate
+        )
+
+        AND
+        (
+            @PlantIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM PlantFilter pf
+                WHERE pf.Id = pu.PlantId
+            )
+        )
+
+        AND
+        (
+            @UnitIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM UnitFilter uf
+                WHERE uf.Id = wh.UnitId
+            )
+        )
+
+        AND
+        (
+            @ProcessModuleIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ProcessModuleFilter pmf
+                WHERE pmf.Id = wp.ProcessModuleId
+            )
+        )
+
+        AND
+        (
+            @WashProcessIds IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM WashProcessFilter wpf
+                WHERE wpf.Id = whdp.WashProcessId
+            )
+        )
+
+        AND
+        (
+            @ShiftList IS NULL
+            OR EXISTS
+            (
+                SELECT 1
+                FROM ShiftFilter sf
+                WHERE sf.Id =
+                    CASE
+                        WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+                        ELSE 2
+                    END
+            )
+        )
+
+    GROUP BY
+        wh.WorkingHourDay,
+        wh.UnitId,
+        wp.ProcessModuleId,
+        whdp.WashProcessId,
+        hs.HourSlot,
+
+        CASE
+            WHEN hs.HourSlot BETWEEN 1 AND 12 THEN 1
+            ELSE 2
+        END
+)
+
+SELECT
+    q.OperationalDate,
+
+    
+
+    q.HourSlot,
+
+    CONCAT(
+        RIGHT(
+            '0' + CAST(((q.HourSlot + 7) % 24) AS VARCHAR(2)),
+            2
+        ),
+        ':00 - ',
+        RIGHT(
+            '0' + CAST(((q.HourSlot + 8) % 24) AS VARCHAR(2)),
+            2
+        ),
+        ':00'
+    ) AS HourRange,
+
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+
+    q.WashProcessId,
+    q.ProcessName,
+
+    SUM(q.PassQty) AS PassQty,
+    SUM(q.DefectQty) AS DefectQty,
+    SUM(q.RejectQty) AS RejectQty,
+
+    SUM(ISNULL(i.IssueQty, 0)) AS IssueQty,
+
+    SUM(ISNULL(t.DayTarget, 0)) AS DayTarget,
+
+    ROUND(
+        AVG(ISNULL(t.ManPower, 0)),
+        0
+    ) AS ManPower,
+
+    AVG(ISNULL(t.SMV, 0)) AS SMV,
+
+    CASE
+        WHEN SUM(q.PassQty) = 0 THEN 0
+        ELSE CAST(
+            SUM(ISNULL(i.IssueQty, 0))
+            * 100.0
+            / NULLIF(SUM(q.PassQty), 0)
+            AS DECIMAL(18, 2)
+        )
+    END AS DHU,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+        THEN 0
+        ELSE CAST(
+            SUM(ISNULL(t.DayTarget, 0))
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                1
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS PlanEff,
+
+    CASE
+        WHEN AVG(ISNULL(t.ManPower, 0)) = 0
+          OR AVG(ISNULL(t.SMV, 0)) = 0
+        THEN 0
+        ELSE CAST(
+            SUM(q.PassQty)
+            * AVG(ISNULL(t.SMV, 0))
+            * 100.0
+            /
+            (
+                1
+                * AVG(ISNULL(t.ManPower, 0))
+                * 60
+            )
+            AS DECIMAL(18, 2)
+        )
+    END AS ActualEff
+
+FROM QcData q
+
+LEFT JOIN IssueData i
+   on i.UnitId = q.UnitId
+   AND i.ProcessModuleId = q.ProcessModuleId
+   AND i.WashProcessId = q.WashProcessId
+   AND i.OperationalDate = q.OperationalDate
+   AND i.Shift = q.Shift
+   AND i.HourSlot = q.HourSlot
+
+LEFT JOIN TargetData t
+    ON t.UnitId = q.UnitId
+   AND t.ProcessModuleId = q.ProcessModuleId
+   AND t.WashProcessId = q.WashProcessId
+   AND t.OperationalDate = q.OperationalDate
+   AND t.Shift = q.Shift
+   AND t.HourSlot = q.HourSlot
+
+GROUP BY
+    q.OperationalDate,
+    q.Shift,
+    q.HourSlot,
+
+    
+
+    q.ProcessModuleId,
+    q.ProcessModuleName,
+
+
+    q.WashProcessId,
+    q.ProcessName
+
+ORDER BY
+    q.OperationalDate,
+    q.HourSlot,
+    q.ProcessModuleName,
+    q.ProcessName
 
 OPTION (RECOMPILE);
 ";

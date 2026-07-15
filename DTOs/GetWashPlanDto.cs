@@ -16,6 +16,7 @@ namespace wsahRecieveDelivary.DTOs
 
         public decimal? OrderQuantity { get; set; }
         public DateTime? TOD { get; set; }
+        public DateTime? WashTargetDate { get; set; }
 
         public decimal? WashBalance { get; set; }
         public decimal? FromReceived { get; set; }

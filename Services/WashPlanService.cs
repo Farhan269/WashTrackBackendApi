@@ -162,7 +162,8 @@ namespace wsahRecieveDelivary.Services
                         x.UnitId == item.UnitId &&
                         x.PlanDate == item.PlanDate &&
                         x.Shift == item.Shift &&
-                        x.ProcessStageId == item.ProcessStageId
+                        x.ProcessStageId == item.ProcessStageId &&
+                        x.IsDeleted == false 
                     );
 
                     if (existing != null)
@@ -221,6 +222,54 @@ namespace wsahRecieveDelivary.Services
                 return new MessageHelper
                 {
                     Message = "Create/Update Successfully"
+                };
+            }
+            catch (Exception ex)
+            {
+                return new MessageHelper
+                {
+                    Message = ex.InnerException?.Message ?? ex.Message
+                };
+            }
+        }
+
+        public async Task<MessageHelper> DeleteWashPlanAsync(long washPlanId, int? UpdatedBy)
+        {
+            try
+            {
+                DateTime bdTime = GetBdTime();
+
+                var washPlan = await _context.WashPlan
+                    .FirstOrDefaultAsync(x => x.Id == washPlanId && !x.IsDeleted);
+
+                if (washPlan == null)
+                {
+                    return new MessageHelper
+                    {
+                        Message = "Wash plan not found."
+                    };
+                }
+
+                washPlan.IsDeleted = true;
+                washPlan.UpdatedAt = bdTime;
+                washPlan.UpdatedBy = UpdatedBy;
+
+                var machines = await _context.WashPlanMachine
+                    .Where(x => x.WashPlanId == washPlanId && !x.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var machine in machines)
+                {
+                    machine.IsDeleted = true;
+                    machine.UpdatedAt = bdTime;
+                    machine.UpdatedBy = UpdatedBy;
+                }
+
+                await _context.SaveChangesAsync();
+
+                return new MessageHelper
+                {
+                    Message = "Deleted successfully."
                 };
             }
             catch (Exception ex)
@@ -437,6 +486,7 @@ namespace wsahRecieveDelivary.Services
 
                                  OrderQuantity = wo.OrderQuantity ?? 0,
                                  TOD = wo.TOD,
+                                 WashTargetDate = wo.WashTargetDate,
 
                                  WashBalance = wo.WashBalance ?? 0,
                                  FromReceived = wo.FromReceived ?? 0,

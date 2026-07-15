@@ -1,4 +1,5 @@
-﻿using wsahRecieveDelivary.DTOs;
+﻿using wsahRecieveDelivary.Common.Models;
+using wsahRecieveDelivary.DTOs;
 
 namespace wsahRecieveDelivary.IRepository
 {
@@ -11,5 +12,11 @@ namespace wsahRecieveDelivary.IRepository
 
         Task<IEnumerable<TopIssueDTO>> GetWetTopIssuesAsync(DryProcessSummaryFilterDto filter);
 
+        //Task<IEnumerable<DhuDryProcessDetailsDTO>> GetDryProcessDetailsAsync(DryProcessDetailsFilterDto filter);
+        Task<PagedResult<DhuDryProcessDetailsDTO>> GetDryProcessDetailsAsync(DryProcessDetailsFilterDto filter);
+        Task<PagedResult<DhuDryProcessDetailsDTO>> GetWetProcessDetailsAsync(DryProcessDetailsFilterDto filter);
+
+        Task<IEnumerable<DhuDryProcessHourlyDetailsDTO>> GetDryProcessHourlyDetailsAsync(DhuDryProcessHourlyDetailsFilterDto filter);
+        Task<IEnumerable<DhuDryProcessHourlyDetailsDTO>> GetWetProcessHourlyDetailsAsync(DhuDryProcessHourlyDetailsFilterDto filter);
     }
 }

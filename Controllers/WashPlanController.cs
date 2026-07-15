@@ -42,6 +42,22 @@ namespace wsahRecieveDelivary.Controllers
             }
         }
 
+        [HttpDelete]
+        [Route("DeleteWashPlan")]
+
+        public async Task<MessageHelper> DeleteWashPlanAsync(long washPlanId, int? UpdatedBy)
+        {
+            try
+            {
+                var msg = await _washplanService.DeleteWashPlanAsync(washPlanId, UpdatedBy);
+                return msg;
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+        }
+
         //[HttpGet]
         //[Route("PlantUnitList")]
         //public async Task<IActionResult> PlantUnitListAsync()
