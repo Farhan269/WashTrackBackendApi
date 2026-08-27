@@ -2,6 +2,7 @@
 using wsahRecieveDelivary.Data;
 using wsahRecieveDelivary.DTOs;
 using wsahRecieveDelivary.Models;
+using wsahRecieveDelivary.Models.Enums;
 
 namespace wsahRecieveDelivary.Services
 {
@@ -306,62 +307,108 @@ namespace wsahRecieveDelivary.Services
         {
             try
             {
+
+
+
+                //var achievedQuery = _context.WashTransactions
+                //                .Where(x =>
+                //                    x.IsActive == true)
+                //                .GroupBy(x => new
+                //                {
+                //                    x.WorkOrderId,
+                //                    x.ProcessStageId,
+                //                    x.ShiftDate,
+                //                    x.ShiftType
+                //                })
+                //                .Select(g => new
+                //                {
+                //                    g.Key.WorkOrderId,
+                //                    g.Key.ProcessStageId,
+                //                    g.Key.ShiftDate,
+                //                    g.Key.ShiftType,
+
+                //                    AchievedQty = g.Sum(x => (decimal?)x.Quantity) ?? 0
+                //                });
+
+
                 // ======================
                 // BASE QUERY
                 // ======================
-                var query = from wp in _context.WashPlan
-                            join wo in _context.WorkOrders on wp.WorkOrderId equals wo.Id
-                            join ps in _context.ProcessStages on wp.ProcessStageId equals ps.Id
-                            join un in _context.Units on wp.UnitId equals un.Id
-                            join p in _context.Plants on un.PlantId equals p.Id
+                var query =
+     from wp in _context.WashPlan
 
-                            select new WashPlanDto
-                            {
-                                Id = wp.Id,   // 🔥 THIS IS MISSING (CRITICAL FIX)
-                                WorkOrderId = wp.WorkOrderId,
-                                WorkOrderNo = wo.WorkOrderNo,
-                                PlanDate = wp.PlanDate,
+     join wo in _context.WorkOrders
+         on wp.WorkOrderId equals wo.Id
 
-                                PlantId = wp.PlantId,
-                                PlantName = p.Name,
+     join ps in _context.ProcessStages
+         on wp.ProcessStageId equals ps.Id
 
-                                UnitId = wp.UnitId,
-                                UnitName = un.Name,
+     join un in _context.Units
+         on wp.UnitId equals un.Id
 
-                                Shift = wp.Shift,
+     join p in _context.Plants
+         on un.PlantId equals p.Id
 
-                                Factory = wo.Factory,
-                                Line = wo.Line,
+    where wp.IsDeleted == false 
 
-                                Buyer = wo.Buyer,
-                                BuyerDepartment = wo.BuyerDepartment,
-                                StyleName = wo.StyleName,
-                                FastReactNo = wo.FastReactNo,
-                                Color = wo.Color,
-                                WashType = wo.WashType,
+     select new WashPlanDto
+     {
+         Id = wp.Id,
 
-                                OrderQuantity = (decimal)wo.OrderQuantity,
-                                CutQty = (decimal)wo.CutQty,
-                                TOD = wo.TOD,
+         WorkOrderId = wp.WorkOrderId,
+         WorkOrderNo = wo.WorkOrderNo,
+         PlanDate = wp.PlanDate,
 
-                                SewingCompDate = wo.SewingCompDate,
-                                FirstRCVDate = wo.FirstRCVDate,
-                                WashApprovalDate = wo.WashApprovalDate,
-                                WashTargetDate = wo.WashTargetDate,
+         PlantId = wp.PlantId,
+         PlantName = p.Name,
 
-                                TotalWashReceived = (decimal)wo.TotalWashReceived,
-                                TotalWashDelivery = (decimal)wo.TotalWashDelivery,
-                                WashBalance = (decimal)wo.WashBalance,
+         UnitId = wp.UnitId,
+         UnitName = un.Name,
 
-                                Marks = wo.Marks,
+         Shift = wp.Shift,
 
-                                ProcessStageId = wp.ProcessStageId,
-                                ProcessStageName = ps.Name,
+         Factory = wo.Factory,
+         Line = wo.Line,
 
-                                FinalTargetQty = wp.FinalTargetQty ?? 0,
-                                BaseTargetQty = wp.BaseTargetQty ?? 0
-                                
-                            };
+         Buyer = wo.Buyer,
+         BuyerDepartment = wo.BuyerDepartment,
+         StyleName = wo.StyleName,
+         FastReactNo = wo.FastReactNo,
+         Color = wo.Color,
+         WashType = wo.WashType,
+
+         OrderQuantity = (decimal)wo.OrderQuantity,
+         CutQty = (decimal)wo.CutQty,
+         TOD = wo.TOD,
+
+         SewingCompDate = wo.SewingCompDate,
+         FirstRCVDate = wo.FirstRCVDate,
+         WashApprovalDate = wo.WashApprovalDate,
+         WashTargetDate = wo.WashTargetDate,
+
+         TotalWashReceived = (decimal)wo.TotalWashReceived,
+         TotalWashDelivery = (decimal)wo.TotalWashDelivery,
+         WashBalance = (decimal)wo.WashBalance,
+
+         Marks = wo.Marks,
+
+         ProcessStageId = wp.ProcessStageId,
+         ProcessStageName = ps.Name,
+
+         FinalTargetQty = wp.FinalTargetQty ?? 0,
+         BaseTargetQty = wp.BaseTargetQty ?? 0,
+
+         AchievedQty = _context.WashTransactions
+             .Where(t =>
+                 t.IsActive == true &&
+                 t.TransactionType == TransactionType.Delivery &&
+                 t.WorkOrderId == wp.WorkOrderId &&
+                 t.ProcessStageId == wp.ProcessStageId &&
+                 t.ShiftDate == wp.PlanDate &&
+                 (int)t.ShiftType == wp.Shift
+             )
+             .Sum(t => (decimal?)t.Quantity) ?? 0
+     };
 
                 // ======================
                 // FILTERS

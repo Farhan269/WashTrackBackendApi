@@ -49,5 +49,6 @@
 
         public decimal FinalTargetQty { get; set; }
         public decimal? BaseTargetQty { get; set; }
+        public decimal? AchievedQty { get; set; }
     }
 }

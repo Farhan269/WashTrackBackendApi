@@ -221,7 +221,7 @@ namespace wsahRecieveDelivary.Repository
                     };
                 })
                 .OrderBy(x => x.ProcessModuleName)
-                .ThenBy(x => x.ProcessName)
+                .ThenByDescending(x => x.ProcessName)
                 .ToList();
         }
 
@@ -637,7 +637,7 @@ namespace wsahRecieveDelivary.Repository
         }
 
         //////////////DHU Dry Details  
-        ///
+      
 
         public async Task<PagedResult<DhuDryProcessDetailsDTO>>
     GetDryProcessDetailsAsync(DryProcessDetailsFilterDto filter)
@@ -651,9 +651,11 @@ namespace wsahRecieveDelivary.Repository
 
             var allData = new List<DhuDryProcessDetailsDTO>();
 
+            var tasks = new List<Task<IEnumerable<DhuDryProcessDetailsDTO>>>();
+
             if (needTpl)
             {
-                using var tplConnection = _context.CreateConnection();
+                var tplConnection = _context.CreateConnection();
 
                 var tplFilter = CloneFilter(
                     filter,
@@ -662,13 +664,12 @@ namespace wsahRecieveDelivary.Repository
                         : null
                 );
 
-                var tplData = await QueryDatabaseDetailsAsync(tplConnection, tplFilter);
-                allData.AddRange(tplData);
+                tasks.Add(QueryDatabaseDetailsAsync(tplConnection, tplFilter));
             }
 
             if (needTwl)
             {
-                using var twlConnection = _twlContext.CreateConnection();
+                var twlConnection = _twlContext.CreateConnection();
 
                 var twlFilter = CloneFilter(
                     filter,
@@ -677,8 +678,14 @@ namespace wsahRecieveDelivary.Repository
                         : null
                 );
 
-                var twlData = await QueryDatabaseDetailsAsync(twlConnection, twlFilter);
-                allData.AddRange(twlData);
+                tasks.Add(QueryDatabaseDetailsAsync(twlConnection, twlFilter));
+            }
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results)
+            {
+                allData.AddRange(result);
             }
 
             var pageNumber = filter.PageNumber <= 0
@@ -689,13 +696,15 @@ namespace wsahRecieveDelivary.Repository
                 ? 10
                 : filter.PageSize;
 
-            var aggregatedData = AggregateDetails(allData)
-                .OrderBy(x => x.ProcessModuleName)
-                .ThenBy(x => x.StyleName)
-                .ThenBy(x => x.FastReactNo)
-                .ThenBy(x => x.WorkOrderNo)
-                .ThenBy(x => x.ProcessName)
-                .ToList();
+            var aggregatedData = allData.ToList();
+
+            //        var aggregatedData = allData
+            //.OrderBy(x => x.ProcessModuleName)
+            //.ThenBy(x => x.StyleName)
+            //.ThenBy(x => x.FastReactNo)
+            //.ThenBy(x => x.WorkOrderNo)
+            //.ThenBy(x => x.ProcessName)
+            //.ToList();
 
             var totalCount = aggregatedData.Count;
 
@@ -800,6 +809,7 @@ namespace wsahRecieveDelivary.Repository
                     var passQty = g.Sum(x => x.PassQty);
                     var defectQty = g.Sum(x => x.DefectQty);
                     var rejectQty = g.Sum(x => x.RejectQty);
+                    var totalpassQty = g.Sum(x => x.TotalPassQty);
                     var issueQty = g.Sum(x => x.IssueQty);
                     var dayTarget = g.Sum(x => x.DayTarget);
 
@@ -820,6 +830,7 @@ namespace wsahRecieveDelivary.Repository
                         PassQty = passQty,
                         DefectQty = defectQty,
                         RejectQty = rejectQty,
+                        TotalPassQty = totalpassQty,
                         IssueQty = issueQty,
 
                         DayTarget = dayTarget,
@@ -861,9 +872,11 @@ namespace wsahRecieveDelivary.Repository
 
             var allData = new List<DhuDryProcessDetailsDTO>();
 
+            var tasks = new List<Task<IEnumerable<DhuDryProcessDetailsDTO>>>();
+
             if (needTpl)
             {
-                using var tplConnection = _context.CreateConnection();
+                var tplConnection = _context.CreateConnection();
 
                 var tplFilter = CloneFilter(
                     filter,
@@ -872,13 +885,12 @@ namespace wsahRecieveDelivary.Repository
                         : null
                 );
 
-                var tplData = await QueryWetDatabaseDetailsAsync(tplConnection, tplFilter);
-                allData.AddRange(tplData);
+                tasks.Add(QueryWetDatabaseDetailsAsync(tplConnection, tplFilter));
             }
 
             if (needTwl)
             {
-                using var twlConnection = _twlContext.CreateConnection();
+                var twlConnection = _twlContext.CreateConnection();
 
                 var twlFilter = CloneFilter(
                     filter,
@@ -887,8 +899,14 @@ namespace wsahRecieveDelivary.Repository
                         : null
                 );
 
-                var twlData = await QueryWetDatabaseDetailsAsync(twlConnection, twlFilter);
-                allData.AddRange(twlData);
+                tasks.Add(QueryWetDatabaseDetailsAsync(twlConnection, twlFilter));
+            }
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results)
+            {
+                allData.AddRange(result);
             }
 
             var pageNumber = filter.PageNumber <= 0
@@ -899,13 +917,15 @@ namespace wsahRecieveDelivary.Repository
                 ? 10
                 : filter.PageSize;
 
-            var aggregatedData = AggregateDetails(allData)
-                .OrderBy(x => x.ProcessModuleName)
-                .ThenBy(x => x.StyleName)
-                .ThenBy(x => x.FastReactNo)
-                .ThenBy(x => x.WorkOrderNo)
-                .ThenBy(x => x.ProcessName)
-                .ToList();
+            var aggregatedData = allData.ToList();
+
+            //var aggregatedData = AggregateDetails(allData)
+            //    .OrderBy(x => x.ProcessModuleName)
+            //    .ThenBy(x => x.StyleName)
+            //    .ThenBy(x => x.FastReactNo)
+            //    .ThenBy(x => x.WorkOrderNo)
+            //    .ThenBy(x => x.ProcessName)
+            //    .ToList();
 
             var totalCount = aggregatedData.Count;
 

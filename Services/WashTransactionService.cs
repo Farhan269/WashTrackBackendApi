@@ -1003,7 +1003,7 @@ namespace wsahRecieveDelivary.Services
                     .Include(t => t.ProcessStage)
                     .Include(t => t.CreatedByUser)
                     .Include(t => t.UpdatedByUser)
-                    .Where(t => t.IsActive)
+                    .Where(t => t.IsActive == true)
                     .AsQueryable();
 
                 Console.WriteLine($"📊 Initial query count (before filters): {query.Count()}");

@@ -18,6 +18,7 @@
         public decimal DefectQty { get; set; }
 
         public decimal RejectQty { get; set; }
+        public decimal TotalPassQty { get; set; }
 
         public decimal IssueQty { get; set; }
 
