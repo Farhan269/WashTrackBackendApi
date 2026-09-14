@@ -42,7 +42,7 @@ namespace wsahRecieveDelivary.Services
             string? factory = null,
             string? unit = null,
             int? processStageId = null);
+        Task<byte[]> ExportShortCsvAsync(ReportRequestDto request);
 
-        
     }
 }

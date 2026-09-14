@@ -1,8 +1,9 @@
-﻿// D:\test c#\wsahRecieveDelivary\Services\ReportService.cs
+// D:\test c#\wsahRecieveDelivary\Services\ReportService.cs
 using Microsoft.EntityFrameworkCore;
 using System.Text;
 using wsahRecieveDelivary.Data;
 using wsahRecieveDelivary.DTOs;
+using wsahRecieveDelivary.IRepository;
 using wsahRecieveDelivary.Models;
 using wsahRecieveDelivary.Models.Enums;
 
@@ -11,10 +12,12 @@ namespace wsahRecieveDelivary.Services
     public class ReportService : IReportService
     {
         private readonly ApplicationDbContext _context;
+        private readonly ITusukaExtremeRepository _tusukaExtremeRepo;
 
-        public ReportService(ApplicationDbContext context)
+        public ReportService(ApplicationDbContext context, ITusukaExtremeRepository tusukaExtremeRepo)
         {
             _context = context;
+            _tusukaExtremeRepo = tusukaExtremeRepo;
         }
 
         
@@ -273,18 +276,18 @@ namespace wsahRecieveDelivary.Services
                     //    transactionQuery = transactionQuery.Where(t => t.TransactionDate.Date <= request.EndDate);
                     if (request.StartDate.HasValue)
                     {
-                        var startDate = request.StartDate.Value.ToDateTime(TimeOnly.MinValue);
+                        var startDate = request.StartDate;
 
                         transactionQuery = transactionQuery
-                            .Where(t => t.TransactionDate >= startDate);
+                            .Where(t => t.ShiftDate >= startDate);
                     }
 
                     if (request.EndDate.HasValue)
                     {
-                        var endDate = request.EndDate.Value.ToDateTime(TimeOnly.MaxValue);
+                        var endDate = request.EndDate;
 
                         transactionQuery = transactionQuery
-                            .Where(t => t.TransactionDate <= endDate);
+                            .Where(t => t.ShiftDate <= endDate);
                     }
 
                     if (request.ProcessStageId.HasValue)
@@ -1080,6 +1083,347 @@ namespace wsahRecieveDelivary.Services
             {
                 Console.WriteLine($"❌ Error calculating summary: {ex.Message}");
                 return new ReportSummaryDto();
+            }
+        }
+
+        public async Task<byte[]> ExportShortCsvAsync(ReportRequestDto request)
+        {
+            try
+            {
+                Console.WriteLine("📥 ExportShortCsvAsync called");
+
+                // ==========================================
+                // SOURCE 1: Get local data - DATE-WISE (1st Dry, 1st Wash, 2nd Dry)
+                // Key: (WorkOrderNo, ShiftDate)
+                // ==========================================
+                var workOrderQuery = _context.WorkOrders.AsNoTracking().AsQueryable();
+                workOrderQuery = ApplyWorkOrderFilters(workOrderQuery, request);
+                if (request.IsCompleted == true)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status == 5);
+                }
+                else if (request.IsCompleted == false)
+                {
+                    workOrderQuery = workOrderQuery.Where(w => w.Status != 5 || w.Status == null);
+                }
+
+                if (request.StartDate.HasValue || request.EndDate.HasValue ||
+                    request.ProcessStageId.HasValue || request.TransactionTypeId.HasValue)
+                {
+                    var transactionQuery = _context.WashTransactions
+                        .AsNoTracking()
+                        .Where(t => t.IsActive);
+
+                    if (request.StartDate.HasValue)
+                    {
+                        var startDate = request.StartDate;
+                        transactionQuery = transactionQuery.Where(t => t.ShiftDate >= startDate);
+                    }
+
+                    if (request.EndDate.HasValue)
+                    {
+                        var endDate = request.EndDate;
+                        transactionQuery = transactionQuery.Where(t => t.ShiftDate <= endDate);
+                    }
+
+                    if (request.ProcessStageId.HasValue)
+                        transactionQuery = transactionQuery.Where(t => t.ProcessStageId == request.ProcessStageId.Value);
+
+                    if (request.TransactionTypeId.HasValue)
+                    {
+                        var transactionType = (TransactionType)request.TransactionTypeId.Value;
+                        transactionQuery = transactionQuery.Where(t => t.TransactionType == transactionType);
+                    }
+
+                    var matchingWorkOrderIds = await transactionQuery
+                        .Select(t => t.WorkOrderId)
+                        .Distinct()
+                        .ToListAsync();
+
+                    workOrderQuery = workOrderQuery.Where(w => matchingWorkOrderIds.Contains(w.Id));
+                }
+
+                var workOrders = await workOrderQuery
+                    .Select(w => new WorkOrderData
+                    {
+                        Id = w.Id,
+                        Factory = w.Factory ?? "",
+                        Unit = w.Unit ?? "",
+                        WorkOrderNo = w.WorkOrderNo ?? "",
+                        FastReactNo = w.FastReactNo,
+                        Buyer = w.Buyer ?? "",
+                        StyleName = w.StyleName ?? "",
+                        Marks = w.Marks,
+                        OrderQuantity = w.OrderQuantity ?? 0,
+                        WashTargetDate = w.WashTargetDate,
+                        TotalWashReceived = w.TotalWashReceived ?? 0,
+                        TotalWashDelivery = w.TotalWashDelivery ?? 0,
+                        Status = (int?)w.Status
+                    })
+                    .ToListAsync();
+
+                var workOrderIds = workOrders.Select(w => w.Id).ToList();
+
+                // Build WorkOrderId -> WorkOrderNo + FastReactNo lookup
+                var workOrderMetaById = workOrders
+                    .Where(w => !string.IsNullOrEmpty(w.WorkOrderNo))
+                    .ToDictionary(w => w.Id, w => new { w.WorkOrderNo, w.FastReactNo });
+
+                // Get ALL transactions DATE-WISE grouped by (WorkOrderId, ShiftDate, Stage)
+                // IMPORTANT: Apply StartDate/EndDate filter to transactions to avoid returning dates outside the range
+                var rawTxQuery = _context.WashTransactions
+                    .AsNoTracking()
+                    .Include(t => t.ProcessStage)
+                    .Where(t => workOrderIds.Contains(t.WorkOrderId) && t.IsActive);
+
+                if (request.StartDate.HasValue)
+                {
+                    rawTxQuery = rawTxQuery.Where(t => t.ShiftDate >= request.StartDate.Value);
+                }
+
+                if (request.EndDate.HasValue)
+                {
+                    rawTxQuery = rawTxQuery.Where(t => t.ShiftDate <= request.EndDate.Value);
+                }
+
+                var rawTransactions = await rawTxQuery
+                    .Select(t => new
+                    {
+                        t.WorkOrderId,
+                        t.ShiftDate,
+                        StageName = t.ProcessStage.Name,
+                        t.TransactionType,
+                        t.Quantity
+                    })
+                    .ToListAsync();
+
+                // Aggregate DATE-WISE local data
+                // Key: WorkOrderNo + "|" + yyyy-MM-dd
+                var localByWorkOrderDate = new Dictionary<string, (decimal FirstDry, decimal FirstWash, decimal SecondDry)>(StringComparer.OrdinalIgnoreCase);
+                var localFastReactByWorkOrder = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var wo in workOrders)
+                {
+                    if (string.IsNullOrEmpty(wo.WorkOrderNo)) continue;
+                    if (!string.IsNullOrEmpty(wo.FastReactNo))
+                    {
+                        localFastReactByWorkOrder[wo.WorkOrderNo] = wo.FastReactNo;
+                    }
+                }
+
+                foreach (var tx in rawTransactions)
+                {
+                    if (!workOrderMetaById.TryGetValue(tx.WorkOrderId, out var meta)) continue;
+
+                    // Skip transactions outside date range (double-check)
+                    if (request.StartDate.HasValue && tx.ShiftDate < request.StartDate.Value) continue;
+                    if (request.EndDate.HasValue && tx.ShiftDate > request.EndDate.Value) continue;
+
+                    var key = $"{meta.WorkOrderNo}|{tx.ShiftDate:yyyy-MM-dd}";
+                    if (!localByWorkOrderDate.ContainsKey(key))
+                    {
+                        localByWorkOrderDate[key] = (0, 0, 0);
+                    }
+
+                    var current = localByWorkOrderDate[key];
+
+                    if (tx.StageName == "1st Dry" && tx.TransactionType == TransactionType.Delivery)
+                    {
+                        current.FirstDry += tx.Quantity;
+                    }
+                    else if (tx.StageName == "1st Wash" && tx.TransactionType == TransactionType.Delivery)
+                    {
+                        current.FirstWash += tx.Quantity;
+                    }
+                    else if (tx.StageName == "2nd Dry" && tx.TransactionType == TransactionType.Delivery)
+                    {
+                        current.SecondDry += tx.Quantity;
+                    }
+
+                    localByWorkOrderDate[key] = current;
+                }
+
+                // ==========================================
+                // SOURCE 2: Get Final Wash from TusukaExtreme - DATE-WISE
+                // Fetch ALL rows in a single call (no pagination loop)
+                // ==========================================
+                List<string>? plantFilter = null;
+                if (!string.IsNullOrEmpty(request.Factory))
+                {
+                    plantFilter = new List<string> { request.Factory };
+                }
+
+                List<string>? unitFilter = null;
+                if (!string.IsNullOrEmpty(request.Unit))
+                {
+                    unitFilter = new List<string> { request.Unit };
+                }
+
+                var washDeliveryData = await _tusukaExtremeRepo.GetWashDeliveryDetailsAsync(
+                    request.StartDate,
+                    request.EndDate,
+                    plantFilter,
+                    unitFilter,
+                    1,
+                    int.MaxValue
+                );
+
+                // Key: WorkOrderNo + "|" + yyyy-MM-dd
+                var finalWashByWorkOrderDate = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+                var tusukaFastReactByWorkOrder = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var productionDateByKey = new Dictionary<string, DateOnly>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var wd in washDeliveryData.Data)
+                {
+                    if (string.IsNullOrEmpty(wd.WorkOrderNo)) continue;
+
+                    if (!string.IsNullOrEmpty(wd.FastReactNo))
+                    {
+                        tusukaFastReactByWorkOrder[wd.WorkOrderNo] = wd.FastReactNo;
+                    }
+
+                    DateOnly prodDate;
+                    if (wd.ProductionDate.HasValue)
+                    {
+                        prodDate = DateOnly.FromDateTime(wd.ProductionDate.Value);
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    // Skip rows outside the requested date range (double-check)
+                    if (request.StartDate.HasValue && prodDate < request.StartDate.Value) continue;
+                    if (request.EndDate.HasValue && prodDate > request.EndDate.Value) continue;
+
+                    var key = $"{wd.WorkOrderNo}|{prodDate:yyyy-MM-dd}";
+
+                    if (!productionDateByKey.ContainsKey(key))
+                    {
+                        productionDateByKey[key] = prodDate;
+                    }
+
+                    if (!finalWashByWorkOrderDate.ContainsKey(key))
+                    {
+                        finalWashByWorkOrderDate[key] = 0;
+                    }
+
+                    finalWashByWorkOrderDate[key] += wd.Delivery;
+                }
+
+                // ==========================================
+                // FULL OUTER JOIN: Merge (WorkOrderNo, Date) from BOTH sources
+                // ==========================================
+                var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var key in localByWorkOrderDate.Keys)
+                    allKeys.Add(key);
+                foreach (var key in finalWashByWorkOrderDate.Keys)
+                    allKeys.Add(key);
+
+                if (allKeys.Count == 0)
+                {
+                    throw new Exception("No data to export");
+                }
+
+                // Build CSV
+                var sb = new StringBuilder();
+                var preamble = Encoding.UTF8.GetPreamble();
+
+                // Headers: Work Order No, FastReact No, Production Date, 1st Dry, 1st Wash, 2nd Dry, Final Wash
+                sb.AppendLine("Work Order No,FastReact No,Production Date,1st Dry,1st Wash,2nd Dry,Final Wash");
+
+                // Sort by Date (ascending) first, then by WorkOrderNo (ascending)
+                var sortedKeys = allKeys
+                    .Select(key =>
+                    {
+                        var parts = key.Split('|');
+                        var workOrderNo = parts[0];
+                        var dateStr = parts.Length > 1 ? parts[1] : "";
+
+                        DateOnly? productionDate = null;
+                        if (productionDateByKey.TryGetValue(key, out var pDate))
+                        {
+                            productionDate = pDate;
+                        }
+                        else if (DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", out var parsed))
+                        {
+                            productionDate = parsed;
+                        }
+
+                        return new { Key = key, WorkOrderNo = workOrderNo, ProductionDate = productionDate };
+                    })
+                    .OrderBy(x => x.ProductionDate.HasValue ? 0 : 1)
+                    .ThenBy(x => x.ProductionDate)
+                    .ThenBy(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.Key)
+                    .ToList();
+
+                foreach (var key in sortedKeys)
+                {
+                    var parts = key.Split('|');
+                    var workOrderNo = parts[0];
+                    var dateStr = parts.Length > 1 ? parts[1] : "";
+
+                    // Parse date
+                    DateOnly? productionDate = null;
+                    if (productionDateByKey.TryGetValue(key, out var pDate))
+                    {
+                        productionDate = pDate;
+                    }
+                    else if (DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", out var parsed))
+                    {
+                        productionDate = parsed;
+                    }
+
+                    // Get local date-wise values
+                    var firstDry = 0m;
+                    var firstWash = 0m;
+                    var secondDry = 0m;
+                    if (localByWorkOrderDate.TryGetValue(key, out var localDel))
+                    {
+                        firstDry = localDel.FirstDry;
+                        firstWash = localDel.FirstWash;
+                        secondDry = localDel.SecondDry;
+                    }
+
+                    // Get Final Wash date-wise
+                    finalWashByWorkOrderDate.TryGetValue(key, out var finalWash);
+
+                    // Get FastReactNo (prefer local, fallback to TusukaExtreme)
+                    string? fastReactNo = null;
+                    if (!localFastReactByWorkOrder.TryGetValue(workOrderNo, out fastReactNo))
+                    {
+                        tusukaFastReactByWorkOrder.TryGetValue(workOrderNo, out fastReactNo);
+                    }
+
+                    var values = new List<string>
+                    {
+                        $"=\"{EscapeCsvField(workOrderNo)}\"",
+                        $"=\"{EscapeCsvField(fastReactNo ?? "")}\"",
+                        productionDate.HasValue ? productionDate.Value.ToString("yyyy-MM-dd") : "",
+                        firstDry.ToString(),
+                        firstWash.ToString(),
+                        secondDry.ToString(),
+                        finalWash.ToString()
+                    };
+
+                    sb.AppendLine(string.Join(",", values));
+                }
+
+                Console.WriteLine($"✅ Short CSV export completed - {allKeys.Count} records");
+
+                var content = Encoding.UTF8.GetBytes(sb.ToString());
+                var result = new byte[preamble.Length + content.Length];
+                preamble.CopyTo(result, 0);
+                content.CopyTo(result, preamble.Length);
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Short CSV export error: {ex.Message}");
+                Console.WriteLine($"   Stack: {ex.StackTrace}");
+                throw;
             }
         }
 

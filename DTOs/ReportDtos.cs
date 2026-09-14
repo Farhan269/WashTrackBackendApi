@@ -8,8 +8,8 @@ namespace wsahRecieveDelivary.DTOs
     // ==========================================
     public class ReportRequestDto
     {
-        private const int MaxPageSize = 100;
-        private int _pageSize = 25;
+        private const int MaxPageSize = int.MaxValue;
+        private int _pageSize = int.MaxValue;
 
         // Pagination
         [Range(1, int.MaxValue, ErrorMessage = "Page must be greater than 0")]

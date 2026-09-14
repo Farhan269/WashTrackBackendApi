@@ -65,168 +65,108 @@ WHERE wop.ProcessId IN (315, 316)
         public const string GetWashDeliveryDetails = @"
 ;WITH AllProductionAgg AS
 (
+    /* =========================================================
+       ALL TIME PRODUCTION
+       One row per WorkOrderItemId
+       ========================================================= */
     SELECT
-        WorkOrderItemId,
+        WOP.WorkOrderItemId,
 
-        SUM(CASE 
-                WHEN ProcessId = 315 
-                THEN ISNULL(Quantity, 0) 
-                ELSE 0 
-            END) AS TotalReceived,
+        SUM(
+            CASE
+                WHEN WOP.ProcessId = 315
+                THEN ISNULL(WOP.Quantity, 0)
+                ELSE 0
+            END
+        ) AS TotalReceived,
 
-        SUM(CASE 
-                WHEN ProcessId = 316 
-                THEN ISNULL(Quantity, 0) 
-                ELSE 0 
-            END) AS TotalSend,
+        SUM(
+            CASE
+                WHEN WOP.ProcessId = 316
+                THEN ISNULL(WOP.Quantity, 0)
+                ELSE 0
+            END
+        ) AS TotalSend,
 
-        MAX(CASE 
-                WHEN ISNULL(Explanation, '') <> '' 
-                 AND ProcessId = 315 
-                THEN Explanation 
-            END) AS Marks
-    FROM MA_WorkOrderProduction WITH (NOLOCK)
-    GROUP BY WorkOrderItemId
+        MAX(
+            CASE
+                WHEN ISNULL(WOP.Explanation, '') <> ''
+                     AND WOP.ProcessId = 315
+                THEN WOP.Explanation
+            END
+        ) AS Marks
+
+    FROM MA_WorkOrderProduction WOP
+
+    WHERE WOP.ProcessId IN (315, 316)
+
+    GROUP BY
+        WOP.WorkOrderItemId
 ),
+
 
 DateProductionAgg AS
 (
+    /* =========================================================
+       SELECTED DATE PRODUCTION
+
+       IMPORTANT:
+       Plant + Unit filtering happens DIRECTLY on
+       MA_WorkOrderProduction.UD_WashUnit.
+
+       This is the same source/logic as your correct summary API.
+       ========================================================= */
     SELECT
-        WorkOrderItemId,
+        WOP.WorkOrderItemId,
 
-        CAST(MAX(ProductionDate) AS DATE) AS ProductionDate,
+        WOP.UD_WashUnit AS Unit,
 
-        SUM(CASE 
-                WHEN ProcessId = 315 
-                THEN ISNULL(Quantity, 0) 
-                ELSE 0 
-            END) AS Receive,
+        CAST(MAX(WOP.ProductionDate) AS DATE) AS ProductionDate,
 
-        SUM(CASE 
-                WHEN ProcessId = 316 
-                THEN ISNULL(Quantity, 0) 
-                ELSE 0 
-            END) AS Delivery
+        SUM(
+            CASE
+                WHEN WOP.ProcessId = 315
+                THEN ISNULL(WOP.Quantity, 0)
+                ELSE 0
+            END
+        ) AS Receive,
 
-    FROM MA_WorkOrderProduction WITH (NOLOCK)
-    WHERE ProcessId IN (315, 316)
-      AND (@FromDate IS NULL OR ProductionDate >= @FromDate)
-      AND (@ToDate IS NULL OR ProductionDate < DATEADD(DAY, 1, @ToDate))
-    GROUP BY WorkOrderItemId
-),
+        SUM(
+            CASE
+                WHEN WOP.ProcessId = 316
+                THEN ISNULL(WOP.Quantity, 0)
+                ELSE 0
+            END
+        ) AS Delivery
 
-WOP AS
-(
-    SELECT
-        allAgg.WorkOrderItemId,
-        dateAgg.ProductionDate,
+    FROM MA_WorkOrderProduction WOP
 
-        ISNULL(allAgg.TotalReceived, 0) AS TotalReceived,
-        ISNULL(allAgg.TotalSend, 0) AS TotalSend,
+    INNER JOIN MA_WorkOrderItem WOI
+        ON WOP.WorkOrderItemId = WOI.RecId
 
-        ISNULL(dateAgg.Receive, 0) AS Receive,
-        ISNULL(dateAgg.Delivery, 0) AS Delivery,
-
-        allAgg.Marks
-    FROM AllProductionAgg allAgg
-    INNER JOIN DateProductionAgg dateAgg
-        ON dateAgg.WorkOrderItemId = allAgg.WorkOrderItemId
-),
-
-BaseData AS
-(
-    SELECT
-        WOP.ProductionDate,
-
-        ISNULL(FWF.Factory, '') AS Factory,
-        ISNULL(R.ResourceCode, '') AS Unit,
-
-        ISNULL(Ac.CurrentAccountName, '') + '::' +
-        ISNULL(ID.DepartmentName, '') AS Buyer,
-
-        ISNULL(X.WorkOrderNo, '') AS WorkOrderNo,
-        ISNULL(I.InventoryName, '') AS StyleName,
-        ISNULL(WOI.UD_FastReactNo, '') AS FastReactNo,
-
-        (
-            SELECT TOP 1 ISNULL(VI.ItemName, '')
-            FROM IM_VariantItem VI WITH (NOLOCK)
-            WHERE VI.CompanyId = W.CompanyId
-              AND VI.ItemCode = WOI.OperationCode
-              AND VI.CardId = 1
-        ) AS Color,
-
-        ISNULL(WOI.Quantity, 0) AS OrderQuantity,
-
-        X.UD_InitialEndDate AS WashTargetDate,
-        WOI.DepartureDate AS TOD,
-
-        ISNULL(WOP.TotalReceived, 0) AS TotalWashReceived,
-        ISNULL(WOP.TotalSend, 0) AS TotalWashDelivery,
-
-        ISNULL(WOP.Receive, 0) AS Receive,
-        ISNULL(WOP.Delivery, 0) AS Delivery
-
-    FROM MA_WorkOrder W WITH (NOLOCK)
-
-    LEFT JOIN MA_WorkOrderItem WI WITH (NOLOCK)
-        ON W.RecId = WI.WorkOrderId
-       AND WI.WorkOrderSubType = 1
-
-    LEFT JOIN MA_WorkOrderItem WOI WITH (NOLOCK)
-        ON WOI.WorkOrderId = W.RecId
-       AND WOI.WorkOrderSubType = 2
-       AND WOI.ParentItemId IS NULL
-
-    LEFT JOIN IM_Item I WITH (NOLOCK)
-        ON WI.InventoryId = I.RecId
-
-    LEFT JOIN FI_Account Ac WITH (NOLOCK)
-        ON Ac.RecId = W.CurrentAccountId
-
-    LEFT JOIN IM_ItemDepartment ID WITH (NOLOCK)
-        ON I.ItemDepartmentId = ID.RecId
-
-    LEFT JOIN TSK_WashWorkOrderItem TWOI WITH (NOLOCK)
-        ON TWOI.DocketWorkOrderItemId = WOI.RecId
-
-    LEFT JOIN MA_WorkOrderItem MWI WITH (NOLOCK)
-        ON MWI.RecId = TWOI.WashWorkOrderItemId
-
-    LEFT JOIN MA_WorkOrder X WITH (NOLOCK)
-        ON X.RecId = MWI.WorkOrderId
-
-    LEFT JOIN MA_Resource R WITH (NOLOCK)
-        ON R.RecId = X.ResourceId
-
-    LEFT JOIN TSK_FastReactWashFile FWF WITH (NOLOCK)
-        ON FWF.RecId =
-        (
-            SELECT MAX(TSK.RecId)
-            FROM TSK_FastReactWashFile TSK WITH (NOLOCK, INDEX = TSK_FastReactWashFile_IX1)
-            WHERE TSK.OrderCode = WOI.UD_FastReactNo
-        )
-
-    INNER JOIN WOP
-        ON WOP.WorkOrderItemId = MWI.RecId
+    INNER JOIN MA_Process P
+        ON WOP.ProcessId = P.RecId
 
     WHERE
-        W.WorkOrderType = 15
-        AND X.Status <> 5
-        AND W.Status = 102
-        AND ISNULL(W.IsPLM, 0) = 0
-        AND ISNULL(W.IsClosed, 0) = 0
-        AND ISNULL(W.IsVirtual, 0) = 0
-        AND DATEADD(MONTH, 20, W.WorkOrderDate) > GETDATE()
+        WOP.ProcessId IN (315, 316)
 
-        /* Show work orders that have Receive or Delivery in selected date */
-        AND 
+        AND
         (
-            ISNULL(WOP.Receive, 0) > 0
-            OR ISNULL(WOP.Delivery, 0) > 0
+            @FromDate IS NULL
+            OR WOP.ProductionDate >= @FromDate
         )
 
-        /* Plant Filter */
+        AND
+        (
+            @ToDate IS NULL
+            OR WOP.ProductionDate < DATEADD(DAY, 1, @ToDate)
+        )
+
+        /* =====================================================
+           PLANT FILTER
+           IMPORTANT: use WOP.UD_WashUnit
+           Same as summary query
+           ===================================================== */
         AND
         (
             @PlantCount = 0
@@ -234,48 +174,343 @@ BaseData AS
             OR
             (
                 'TPL' IN @Plant
-                AND R.ResourceCode IN ('Unit 1', 'Unit 2', 'Unit 3', 'Unit 4', 'Unit 5')
+
+                AND WOP.UD_WashUnit IN
+                (
+                    'Unit 1',
+                    'Unit 2',
+                    'Unit 3',
+                    'Unit 4',
+                    'Unit 5'
+                )
             )
 
             OR
             (
                 'TWL' IN @Plant
-                AND R.ResourceCode = 'Unit TWL'
+                AND WOP.UD_WashUnit = 'Unit TWL'
             )
         )
 
-        /* Unit Filter */
+        /* =====================================================
+           WASH UNIT FILTER
+           IMPORTANT: use WOP.UD_WashUnit
+           ===================================================== */
         AND
         (
             @WashUnitCount = 0
-            OR R.ResourceCode IN @WashUnit
+            OR WOP.UD_WashUnit IN @WashUnit
         )
+
+    GROUP BY
+        WOP.WorkOrderItemId,
+        WOP.UD_WashUnit
 ),
+
+
+WOP AS
+(
+    /* =========================================================
+       MERGE SELECTED DATE + ALL TIME PRODUCTION
+       Still one row per WorkOrderItemId / Unit
+       ========================================================= */
+    SELECT
+        DPA.WorkOrderItemId,
+
+        DPA.ProductionDate,
+
+        DPA.Unit,
+
+        ISNULL(APA.TotalReceived, 0) AS TotalReceived,
+
+        ISNULL(APA.TotalSend, 0) AS TotalSend,
+
+        ISNULL(DPA.Receive, 0) AS Receive,
+
+        ISNULL(DPA.Delivery, 0) AS Delivery,
+
+        APA.Marks
+
+    FROM DateProductionAgg DPA
+
+    LEFT JOIN AllProductionAgg APA
+        ON APA.WorkOrderItemId = DPA.WorkOrderItemId
+),
+
+
+ProductionWithWorkOrder AS
+(
+    /* =========================================================
+       Direct relationship:
+
+       MA_WorkOrderProduction.WorkOrderItemId
+                    ↓
+       MA_WorkOrderItem.RecId
+                    ↓
+       MA_WorkOrder.WorkOrderNo
+
+       No docket join required for production amount.
+       ========================================================= */
+    SELECT
+        WOP.ProductionDate,
+
+        WOP.WorkOrderItemId,
+
+        WOP.Unit,
+
+        WOP.TotalReceived,
+
+        WOP.TotalSend,
+
+        WOP.Receive,
+
+        WOP.Delivery,
+
+        WOP.Marks,
+
+        MWI.WorkOrderId AS WashWorkOrderId,
+
+        ISNULL(X.WorkOrderNo, '') AS WorkOrderNo,
+
+        X.UD_InitialEndDate AS WashTargetDate
+
+    FROM WOP
+
+    INNER JOIN MA_WorkOrderItem MWI
+        ON MWI.RecId = WOP.WorkOrderItemId
+
+    LEFT JOIN MA_WorkOrder X
+        ON X.RecId = MWI.WorkOrderId
+),
+
+
+BaseData AS
+(
+    /* =========================================================
+       ATTACH METADATA ONLY
+
+       OUTER APPLY TOP 1 ensures one production row remains
+       exactly one production row.
+
+       Therefore Receive / Delivery cannot multiply.
+       ========================================================= */
+    SELECT
+        PWO.ProductionDate,
+
+        ISNULL(MD.Factory, '') AS Factory,
+
+        /* IMPORTANT:
+           Unit is directly from MA_WorkOrderProduction
+        */
+        ISNULL(PWO.Unit, '') AS Unit,
+
+        ISNULL(MD.Buyer, '') AS Buyer,
+
+        ISNULL(PWO.WorkOrderNo, '') AS WorkOrderNo,
+
+        ISNULL(MD.StyleName, '') AS StyleName,
+
+        ISNULL(MD.FastReactNo, '') AS FastReactNo,
+
+        ISNULL(MD.Color, '') AS Color,
+
+        ISNULL(MD.OrderQuantity, 0) AS OrderQuantity,
+
+        PWO.WashTargetDate,
+
+        MD.TOD,
+
+        ISNULL(PWO.TotalReceived, 0) AS TotalWashReceived,
+
+        ISNULL(PWO.TotalSend, 0) AS TotalWashDelivery,
+
+        ISNULL(PWO.Receive, 0) AS Receive,
+
+        ISNULL(PWO.Delivery, 0) AS Delivery,
+
+        PWO.Marks,
+
+        PWO.WorkOrderItemId
+
+    FROM ProductionWithWorkOrder PWO
+
+
+    OUTER APPLY
+    (
+        SELECT TOP 1
+
+            ISNULL(FWF.Factory, '') AS Factory,
+
+            ISNULL(AC.CurrentAccountName, '')
+            + '::'
+            + ISNULL(ID.DepartmentName, '') AS Buyer,
+
+            ISNULL(I.InventoryName, '') AS StyleName,
+
+            ISNULL(DWOI.UD_FastReactNo, '') AS FastReactNo,
+
+            ISNULL(CLR.Color, '') AS Color,
+
+            ISNULL(DWOI.Quantity, 0) AS OrderQuantity,
+
+            DWOI.DepartureDate AS TOD
+
+        FROM TSK_WashWorkOrderItem TWOI
+
+
+        INNER JOIN MA_WorkOrderItem DWOI
+            ON DWOI.RecId = TWOI.DocketWorkOrderItemId
+
+
+        INNER JOIN MA_WorkOrder DW
+            ON DW.RecId = DWOI.WorkOrderId
+
+
+        /* =====================================================
+           GET ONE STYLE ITEM ONLY
+           Prevent WI multiplication
+           ===================================================== */
+        OUTER APPLY
+        (
+            SELECT TOP 1
+                WI.InventoryId
+
+            FROM MA_WorkOrderItem WI
+
+            WHERE
+                WI.WorkOrderId = DW.RecId
+                AND WI.WorkOrderSubType = 1
+
+            ORDER BY
+                WI.RecId
+        ) STYLE_ITEM
+
+
+        LEFT JOIN IM_Item I
+            ON I.RecId = STYLE_ITEM.InventoryId
+
+
+        LEFT JOIN FI_Account AC
+            ON AC.RecId = DW.CurrentAccountId
+
+
+        LEFT JOIN IM_ItemDepartment ID
+            ON ID.RecId = I.ItemDepartmentId
+
+
+        /* =====================================================
+           COLOR
+           ===================================================== */
+        OUTER APPLY
+        (
+            SELECT TOP 1
+                ISNULL(VI.ItemName, '') AS Color
+
+            FROM IM_VariantItem VI
+
+            WHERE
+                VI.CompanyId = DW.CompanyId
+                AND VI.ItemCode = DWOI.OperationCode
+                AND VI.CardId = 1
+
+            ORDER BY
+                VI.RecId
+        ) CLR
+
+
+        /* =====================================================
+           LATEST FAST REACT WASH FILE
+           ===================================================== */
+        OUTER APPLY
+        (
+            SELECT TOP 1
+                TSK.Factory
+
+            FROM TSK_FastReactWashFile TSK
+
+            WHERE
+                TSK.OrderCode = DWOI.UD_FastReactNo
+
+            ORDER BY
+                TSK.RecId DESC
+        ) FWF
+
+
+        WHERE
+            TWOI.WashWorkOrderItemId = PWO.WorkOrderItemId
+
+        ORDER BY
+            TWOI.RecId DESC
+
+    ) MD
+
+
+    /* =========================================================
+       IMPORTANT
+
+       Do NOT put old W / X status filters here if you want
+       Receive/Delivery total to match the summary API exactly.
+
+       Production itself determines which rows are included.
+       ========================================================= */
+
+    WHERE
+        ISNULL(PWO.Receive, 0) > 0
+        OR ISNULL(PWO.Delivery, 0) > 0
+),
+
 
 FinalData AS
 (
     SELECT
         ProductionDate,
+
         Factory,
+
         Unit,
+
         Buyer,
+
         WorkOrderNo,
+
         StyleName,
+
         FastReactNo,
+
         Color,
 
-        SUM(ISNULL(OrderQuantity, 0)) AS OrderQuantity,
+        /* Metadata value - do not multiply it */
+        MAX(ISNULL(OrderQuantity, 0)) AS OrderQuantity,
 
         WashTargetDate,
-        TOD,
 
-        SUM(ISNULL(TotalWashReceived, 0)) AS TotalWashReceived,
-        SUM(ISNULL(TotalWashDelivery, 0)) AS TotalWashDelivery,
+        MAX(TOD) AS TOD,
 
-        SUM(ISNULL(Receive, 0)) AS Receive,
-        SUM(ISNULL(Delivery, 0)) AS Delivery
+        /* =====================================================
+           Lifetime totals
+
+           BaseData has one row per unique production
+           WorkOrderItemId / Unit, so summing distinct item
+           totals here is safe.
+           ===================================================== */
+        SUM(ISNULL(TotalWashReceived, 0))
+            AS TotalWashReceived,
+
+        SUM(ISNULL(TotalWashDelivery, 0))
+            AS TotalWashDelivery,
+
+        /* =====================================================
+           Selected period totals
+           These should match your summary query.
+           ===================================================== */
+        SUM(ISNULL(Receive, 0))
+            AS Receive,
+
+        SUM(ISNULL(Delivery, 0))
+            AS Delivery
 
     FROM BaseData
+
     GROUP BY
         ProductionDate,
         Factory,
@@ -285,26 +520,62 @@ FinalData AS
         StyleName,
         FastReactNo,
         Color,
-        WashTargetDate,
-        TOD
+        WashTargetDate
 ),
+
 
 CountData AS
 (
-    SELECT COUNT(*) AS TotalRecords
+    SELECT
+        COUNT(*) AS TotalRecords
+
     FROM FinalData
 )
 
+
 SELECT
-    fd.*,
-    cd.TotalRecords
-FROM FinalData fd
-CROSS JOIN CountData cd
+    FD.ProductionDate,
+
+    FD.Factory,
+
+    FD.Unit,
+
+    FD.Buyer,
+
+    FD.WorkOrderNo,
+
+    FD.StyleName,
+
+    FD.FastReactNo,
+
+    FD.Color,
+
+    FD.OrderQuantity,
+
+    FD.WashTargetDate,
+
+    FD.TOD,
+
+    FD.TotalWashReceived,
+
+    FD.TotalWashDelivery,
+
+    FD.Receive,
+
+    FD.Delivery,
+
+    CD.TotalRecords
+
+FROM FinalData FD
+
+CROSS JOIN CountData CD
+
 ORDER BY
-    fd.ProductionDate DESC,
-    fd.Factory,
-    fd.Unit,
-    fd.WorkOrderNo
+    FD.ProductionDate DESC,
+    FD.Factory,
+    FD.Unit,
+    FD.WorkOrderNo
+
 OFFSET @Offset ROWS
 FETCH NEXT @PageSize ROWS ONLY;
 ";

@@ -156,6 +156,38 @@ namespace wsahRecieveDelivary.Controllers
         }
 
         // ==========================================
+        // EXPORT SHORT CSV
+        // ==========================================
+        /// <summary>
+        /// Export short report to CSV with specific columns (Work Order No, FastReact No, 1st Dry Delivery, 1st Wash Delivery, 2nd Dry Delivery, Final Wash Delivery)
+        /// </summary>
+        [HttpGet("export/short-csv")]
+        public async Task<IActionResult> ExportShortCsv([FromQuery] ReportRequestDto request)
+        {
+            try
+            {
+                var csvBytes = await _reportService.ExportShortCsvAsync(request);
+
+                if (csvBytes == null || csvBytes.Length == 0)
+                {
+                    return BadRequest(new { success = false, message = "No data to export" });
+                }
+
+                var fileName = $"Short_Transaction_Report_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+
+                return File(csvBytes, "text/csv", fileName);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = $"Error exporting short report: {ex.Message}"
+                });
+            }
+        }
+
+        // ==========================================
         // GET USER TRANSACTION HISTORY
         // ==========================================
         /// <summary>
