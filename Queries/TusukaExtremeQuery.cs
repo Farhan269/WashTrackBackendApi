@@ -1,4 +1,4 @@
-﻿namespace wsahRecieveDelivary.Queries
+namespace wsahRecieveDelivary.Queries
 {
     public static class TusukaExtremeQuery
     {
@@ -108,9 +108,12 @@ WHERE wop.ProcessId IN (315, 316)
 DateProductionAgg AS
 (
     /* =========================================================
-       SELECTED DATE PRODUCTION
+       SELECTED DATE PRODUCTION (PER-DAY)
 
-       IMPORTANT:
+       Grouped by WorkOrderItemId + Unit + DATE so that
+       Receive / Delivery are broken down DATE-WISE.
+       Each row = one WorkOrderItem / Unit / ProductionDay.
+
        Plant + Unit filtering happens DIRECTLY on
        MA_WorkOrderProduction.UD_WashUnit.
 
@@ -121,7 +124,7 @@ DateProductionAgg AS
 
         WOP.UD_WashUnit AS Unit,
 
-        CAST(MAX(WOP.ProductionDate) AS DATE) AS ProductionDate,
+        CAST(WOP.ProductionDate AS DATE) AS ProductionDate,
 
         SUM(
             CASE
@@ -204,7 +207,8 @@ DateProductionAgg AS
 
     GROUP BY
         WOP.WorkOrderItemId,
-        WOP.UD_WashUnit
+        WOP.UD_WashUnit,
+        CAST(WOP.ProductionDate AS DATE)
 ),
 
 

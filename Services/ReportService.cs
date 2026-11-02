@@ -1086,11 +1086,11 @@ namespace wsahRecieveDelivary.Services
             }
         }
 
-        public async Task<byte[]> ExportShortCsvAsync(ReportRequestDto request)
+        public async Task<List<WashProcessReportRowDto>> GetWashProcessReportAsync(ReportRequestDto request)
         {
             try
             {
-                Console.WriteLine("📥 ExportShortCsvAsync called");
+                Console.WriteLine("📥 GetWashProcessReportAsync called");
 
                 // ==========================================
                 // SOURCE 1: Get local data - DATE-WISE (1st Dry, 1st Wash, 2nd Dry)
@@ -1322,15 +1322,8 @@ namespace wsahRecieveDelivary.Services
 
                 if (allKeys.Count == 0)
                 {
-                    throw new Exception("No data to export");
+                    Console.WriteLine("⚠️ No data found for the requested filters");
                 }
-
-                // Build CSV
-                var sb = new StringBuilder();
-                var preamble = Encoding.UTF8.GetPreamble();
-
-                // Headers: Work Order No, FastReact No, Production Date, 1st Dry, 1st Wash, 2nd Dry, Final Wash
-                sb.AppendLine("Work Order No,FastReact No,Production Date,1st Dry,1st Wash,2nd Dry,Final Wash");
 
                 // Sort by Date (ascending) first, then by WorkOrderNo (ascending)
                 var sortedKeys = allKeys
@@ -1358,11 +1351,12 @@ namespace wsahRecieveDelivary.Services
                     .Select(x => x.Key)
                     .ToList();
 
+                var rows = new List<WashProcessReportRowDto>();
+
                 foreach (var key in sortedKeys)
                 {
                     var parts = key.Split('|');
                     var workOrderNo = parts[0];
-                    var dateStr = parts.Length > 1 ? parts[1] : "";
 
                     // Parse date
                     DateOnly? productionDate = null;
@@ -1370,7 +1364,7 @@ namespace wsahRecieveDelivary.Services
                     {
                         productionDate = pDate;
                     }
-                    else if (DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", out var parsed))
+                    else if (DateOnly.TryParseExact(parts.Length > 1 ? parts[1] : "", "yyyy-MM-dd", out var parsed))
                     {
                         productionDate = parsed;
                     }
@@ -1396,21 +1390,65 @@ namespace wsahRecieveDelivary.Services
                         tusukaFastReactByWorkOrder.TryGetValue(workOrderNo, out fastReactNo);
                     }
 
+                    rows.Add(new WashProcessReportRowDto
+                    {
+                        WorkOrderNo = workOrderNo,
+                        FastReactNo = fastReactNo,
+                        ProductionDate = productionDate,
+                        FirstDry = firstDry,
+                        FirstWash = firstWash,
+                        SecondDry = secondDry,
+                        FinalWash = finalWash
+                    });
+                }
+
+                Console.WriteLine($"✅ Wash process report completed - {rows.Count} records");
+
+                return rows;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Wash process report error: {ex.Message}");
+                Console.WriteLine($"   Stack: {ex.StackTrace}");
+                throw;
+            }
+        }
+
+        public async Task<byte[]> ExportShortCsvAsync(ReportRequestDto request)
+        {
+            try
+            {
+                var rows = await GetWashProcessReportAsync(request);
+
+                if (rows.Count == 0)
+                {
+                    throw new Exception("No data to export");
+                }
+
+                // Build CSV
+                var sb = new StringBuilder();
+                var preamble = Encoding.UTF8.GetPreamble();
+
+                // Headers: Work Order No, FastReact No, Production Date, 1st Dry, 1st Wash, 2nd Dry, Final Wash
+                sb.AppendLine("Work Order No,FastReact No,Production Date,1st Dry,1st Wash,2nd Dry,Final Wash");
+
+                foreach (var r in rows)
+                {
                     var values = new List<string>
                     {
-                        $"=\"{EscapeCsvField(workOrderNo)}\"",
-                        $"=\"{EscapeCsvField(fastReactNo ?? "")}\"",
-                        productionDate.HasValue ? productionDate.Value.ToString("yyyy-MM-dd") : "",
-                        firstDry.ToString(),
-                        firstWash.ToString(),
-                        secondDry.ToString(),
-                        finalWash.ToString()
+                        $"=\"{EscapeCsvField(r.WorkOrderNo)}\"",
+                        $"=\"{EscapeCsvField(r.FastReactNo ?? "")}\"",
+                        r.ProductionDate.HasValue ? r.ProductionDate.Value.ToString("yyyy-MM-dd") : "",
+                        r.FirstDry.ToString(),
+                        r.FirstWash.ToString(),
+                        r.SecondDry.ToString(),
+                        r.FinalWash.ToString()
                     };
 
                     sb.AppendLine(string.Join(",", values));
                 }
 
-                Console.WriteLine($"✅ Short CSV export completed - {allKeys.Count} records");
+                Console.WriteLine($"✅ Short CSV export completed - {rows.Count} records");
 
                 var content = Encoding.UTF8.GetBytes(sb.ToString());
                 var result = new byte[preamble.Length + content.Length];

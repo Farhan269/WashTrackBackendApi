@@ -1,4 +1,4 @@
-﻿// D:\test c#\wsahRecieveDelivary\DTOs\ReportDtos.cs
+// D:\test c#\wsahRecieveDelivary\DTOs\ReportDtos.cs
 using System.ComponentModel.DataAnnotations;
 
 namespace wsahRecieveDelivary.DTOs
@@ -46,6 +46,25 @@ namespace wsahRecieveDelivary.DTOs
 
         public int? ShiftType { get; set; }
         public bool? IsCompleted { get; set; }
+    }
+
+    // ==========================================
+    // WASH PROCESS REPORT ROW DTO (Short CSV / JSON report)
+    // Same data as /api/Report/export/short-csv
+    // ==========================================
+    public class WashProcessReportRowDto
+    {
+        public string WorkOrderNo { get; set; } = "";
+        public string? FastReactNo { get; set; }
+        public DateOnly? ProductionDate { get; set; }
+
+        // From local WashTransactions (Delivery, date-wise by ShiftDate)
+        public decimal FirstDry { get; set; }
+        public decimal FirstWash { get; set; }
+        public decimal SecondDry { get; set; }
+
+        // From TusukaExtreme GetWashDeliveryDetails (Delivery, date-wise by ProductionDate)
+        public decimal FinalWash { get; set; }
     }
 
     // ==========================================

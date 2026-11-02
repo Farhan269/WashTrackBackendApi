@@ -1,4 +1,4 @@
-﻿// D:\test c#\wsahRecieveDelivary\Services\IReportService.cs
+// D:\test c#\wsahRecieveDelivary\Services\IReportService.cs
 using wsahRecieveDelivary.DTOs;
 
 namespace wsahRecieveDelivary.Services
@@ -43,6 +43,13 @@ namespace wsahRecieveDelivary.Services
             string? unit = null,
             int? processStageId = null);
         Task<byte[]> ExportShortCsvAsync(ReportRequestDto request);
+
+        /// <summary>
+        /// Get wash process report rows (same data as the short CSV export) for JSON output.
+        /// Merges local WashTransactions (1st Dry / 1st Wash / 2nd Dry) with
+        /// TusukaExtreme Final Wash delivery, date-wise per (WorkOrderNo, ProductionDate).
+        /// </summary>
+        Task<List<WashProcessReportRowDto>> GetWashProcessReportAsync(ReportRequestDto request);
 
     }
 }
