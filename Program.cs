@@ -107,8 +107,15 @@ try
     builder.Services.AddScoped<ITusukaExtremeRepository, TusukaExtremeRepository>();
 
     // ✅ External API Sync
-    builder.Services.AddHttpClient<IExternalApiSyncService, ExternalApiSyncService>();
+    //builder.Services.AddHttpClient<IExternalApiSyncService, ExternalApiSyncService>();
+    builder.Services.AddHttpClient<IExternalApiSyncService, ExternalApiSyncService>(client =>
+    {
+        client.Timeout = Timeout.InfiniteTimeSpan;
+    });
     builder.Services.AddScoped<IExternalApiSyncService, ExternalApiSyncService>();
+   
+    
+
 
     //service
     builder.Services.AddScoped<WashDhuService>();

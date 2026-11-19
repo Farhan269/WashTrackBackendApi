@@ -871,9 +871,12 @@ namespace wsahRecieveDelivary.Services
         {
             var apiUrl = _configuration["ExternalApi:WashPlansUrl"] ?? "http://192.168.136.53:3000/api/washplans";
             // ✅ Read timeout from config or default to 300 seconds (5 minutes)
-            var timeoutSeconds = _configuration.GetValue<int>("ExternalApi:TimeoutSeconds", 300);
+           // var timeoutSeconds = _configuration.GetValue<int>("ExternalApi:TimeoutSeconds", 300);
             
-            _httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+           // _httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+
+            // Disable HttpClient timeout
+            _httpClient.Timeout = Timeout.InfiniteTimeSpan;
 
             var response = await _httpClient.GetAsync(apiUrl);
             response.EnsureSuccessStatusCode();
